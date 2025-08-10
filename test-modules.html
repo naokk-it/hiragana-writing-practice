@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module Test</title>
+</head>
+<body>
+    <div id="test-output"></div>
+    <script type="module">
+        import { App } from './js/app.js';
+        
+        try {
+            const app = new App();
+            document.getElementById('test-output').innerHTML = '✅ All modules loaded successfully!';
+            console.log('App instance created:', app);
+        } catch (error) {
+            document.getElementById('test-output').innerHTML = '❌ Module loading failed: ' + error.message;
+            console.error('Module loading error:', error);
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>進捗表示テスト</title>
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+    <div id="app">
+        <!-- 進捗表示画面 -->
+        <div id="progress-view" class="screen active">
+            <!-- ProgressViewComponentによって動的に生成される -->
+        </div>
+    </div>
+
+    <script type="module">
+        import { ProgressViewComponent } from './js/components/ProgressViewComponent.js';
+        import { HiraganaDataService } from './js/services/HiraganaDataService.js';
+        import { DataStorageService } from './js/services/DataStorageService.js';
+        import { ProgressTrackingService } from './js/services/ProgressTrackingService.js';
+
+        // モックアプリオブジェクト
+        const mockApp = {
+            getHiraganaDataService: () => new HiraganaDataService(),
+            getProgressTrackingService: () => new ProgressTrackingService(new DataStorageService()),
+            showMainMenu: () => console.log('メインメニューに戻る')
+        };
+
+        // 進捗表示コンポーネントをテスト
+        const progressView = new ProgressViewComponent(mockApp);
+        progressView.init();
+        progressView.onActivate();
+
+        console.log('進捗表示テスト完了');
+    </script>
+</body>
+</html>

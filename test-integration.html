@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>統合テスト - ひらがな手書き練習アプリ</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        .test-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .test-section h3 {
+            color: #333;
+            margin-top: 0;
+        }
+        .test-result {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 3px;
+        }
+        .test-pass {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .test-fail {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .test-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .run-button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .run-button:hover {
+            background: #0056b3;
+        }
+        .run-button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        #app {
+            display: none;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #28a745;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>ひらがな手書き練習アプリ - 統合テスト</h1>
+        
+        <div class="test-section">
+            <h3>テスト実行</h3>
+            <button class="run-button" onclick="runAllTests()">全テスト実行</button>
+            <button class="run-button" onclick="runBrowserTests()">ブラウザ対応テスト</button>
+            <button class="run-button" onclick="runIntegrationTests()">統合テスト</button>
+            <button class="run-button" onclick="runPerformanceTests()">パフォーマンステスト</button>
+            
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress"></div>
+            </div>
+            <div id="test-status">テスト待機中...</div>
+        </div>
+
+        <div class="test-section">
+            <h3>ブラウザ対応状況</h3>
+            <div id="browser-support"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>統合テスト結果</h3>
+            <div id="integration-results"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>パフォーマンステスト結果</h3>
+            <div id="performance-results"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>エラーログ</h3>
+            <div id="error-log"></div>
+        </div>
+    </div>
+
+    <!-- アプリケーション要素（テスト用） -->
+    <div id="app">
+        <div id="main-menu" class="screen active">
+            <button id="start-practice-btn">練習をはじめる</button>
+        </div>
+        <div id="practice-view" class="screen">
+            <span id="target-character">あ</span>
+            <canvas id="drawing-canvas" width="400" height="400"></canvas>
+            <button id="show-example-btn">手本を見る</button>
+            <button id="clear-canvas-btn">消す</button>
+            <button id="submit-drawing-btn">できた！</button>
+        </div>
+        <div id="example-view" class="screen">
+            <span id="example-character">あ</span>
+            <button id="back-to-practice-btn">練習に戻る</button>
+        </div>
+        <div id="result-view" class="screen">
+            <div id="score-icon">😊</div>
+            <div id="score-message">よくできました！</div>
+            <button id="try-again-btn">もう一度</button>
+            <button id="next-character-btn">次の文字</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { App } from './js/app.js';
+        import { ErrorHandler } from './js/services/ErrorHandler.js';
+        import { DrawingService } from './js/services/DrawingService.js';
+        import { RecognitionService } from './js/services/RecognitionService.js';
+        import { ScoreService } from './js/services/ScoreService.js';
+
+        let testResults = [];
+        let currentTestIndex = 0;
+        let totalTests = 0;
+
+        // テスト結果表示用ヘルパー
+        function addTestResult(section, name, passed, message = '', details = null) {
+            const result = { section, name, passed, message, details, timestamp: new Date() };
+            testResults.push(result);
+            
+            const sectionElement = document.getElementById(section);
+            if (sectionElement) {
+                const resultDiv = document.createElement('div');
+                resultDiv.className = `test-result ${passed ? 'test-pass' : 'test-fail'}`;
+                resultDiv.innerHTML = `
+                    <strong>${passed ? '✓' : '✗'} ${name}</strong>
+                    ${message ? `<br><small>${message}</small>` : ''}
+                    ${details ? `<br><pre style="font-size: 0.8em; margin: 5px 0;">${JSON.stringify(details, null, 2)}</pre>` : ''}
+                `;
+                sectionElement.appendChild(resultDiv);
+            }
+        }
+
+        function updateProgress(current, total) {
+            const percentage = (current / total) * 100;
+            document.getElementById('progress').style.width = `${percentage}%`;
+            document.getElementById('test-status').textContent = `テスト実行中... ${current}/${total}`;
+        }
+
+        // ブラウザ対応テスト
+        async function runBrowserTests() {
+            const tests = [
+                {
+                    name: 'Canvas API対応',
+                    test: () => {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        return !!ctx;
+                    }
+                },
+                {
+                    name: 'LocalStorage対応',
+                    test: () => {
+                        try {
+                            localStorage.setItem('test', 'value');
+                            const value = localStorage.getItem('test');
+                            localStorage.removeItem('test');
+                            return value === 'value';
+                        } catch (e) {
+                            return false;
+                        }
+                    }
+                },
+                {
+                    name: 'タッチイベント対応',
+                    test: () => {
+                        return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+                    }
+                },
+                {
+                    name: 'ES6機能対応',
+                    test: () => {
+                        return typeof Symbol !== 'undefined' && typeof Promise === 'function';
+                    }
+                },
+                {
+                    name: 'Web Audio API対応',
+                    test: () => {
+                        return !!(window.AudioContext || window.webkitAudioContext);
+                    }
+                },
+                {
+                    name: 'requestAnimationFrame対応',
+                    test: () => {
+                        return typeof requestAnimationFrame === 'function';
+                    }
+                },
+                {
+                    name: 'デバイス情報取得',
+                    test: () => {
+                        const info = {
+                            userAgent: navigator.userAgent,
+                            platform: navigator.platform,
+                            language: navigator.language,
+                            cookieEnabled: navigator.cookieEnabled,
+                            onLine: navigator.onLine,
+                            screenWidth: screen.width,
+                            screenHeight: screen.height,
+                            devicePixelRatio: window.devicePixelRatio || 1
+                        };
+                        return info;
+                    }
+                }
+            ];
+
+            totalTests = tests.length;
+            currentTestIndex = 0;
+
+            for (const test of tests) {
+                try {
+                    const result = test.test();
+                    const passed = typeof result === 'boolean' ? result : !!result;
+                    addTestResult('browser-support', test.name, passed, '', 
+                        typeof result === 'object' ? result : null);
+                } catch (error) {
+                    addTestResult('browser-support', test.name, false, error.message);
+                }
+                
+                currentTestIndex++;
+                updateProgress(currentTestIndex, totalTests);
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+
+        // 統合テスト
+        async function runIntegrationTests() {
+            const tests = [
+                {
+                    name: 'アプリケーション初期化',
+                    test: async () => {
+                        const app = new App();
+                        await app.init();
+                        return app.appState.isInitialized;
+                    }
+                },
+                {
+                    name: '画面遷移テスト',
+                    test: async () => {
+                        const app = new App();
+                        await app.init();
+                        
+                        const screens = ['main-menu', 'practice-view', 'example-view', 'result-view'];
+                        for (const screen of screens) {
+                            app.showScreen(screen);
+                            if (app.currentScreen !== screen) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                },
+                {
+                    name: '描画サービス統合',
+                    test: () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = 400;
+                        canvas.height = 400;
+                        
+                        const drawingService = new DrawingService();
+                        const result = drawingService.initCanvas(canvas);
+                        
+                        if (!result) return false;
+                        
+                        // 描画テスト
+                        drawingService.startDrawing(100, 100);
+                        drawingService.addPoint(150, 150);
+                        drawingService.endDrawing();
+                        
+                        return drawingService.drawingData.strokes.length > 0;
+                    }
+                },
+                {
+                    name: '文字認識サービス統合',
+                    test: () => {
+                        const recognitionService = new RecognitionService();
+                        const mockDrawingData = {
+                            strokes: [[
+                                { x: 100, y: 100, timestamp: Date.now() },
+                                { x: 150, y: 150, timestamp: Date.now() + 100 }
+                            ]],
+                            timestamp: Date.now(),
+                            boundingBox: { x: 100, y: 100, width: 50, height: 50 }
+                        };
+                        
+                        const result = recognitionService.recognizeCharacter(mockDrawingData, 'あ');
+                        return result && result.character === 'あ';
+                    }
+                },
+                {
+                    name: '採点サービス統合',
+                    test: () => {
+                        const scoreService = new ScoreService();
+                        const mockRecognitionResult = {
+                            character: 'あ',
+                            confidence: 0.8,
+                            recognized: true
+                        };
+                        const mockDrawingData = {
+                            strokes: [[{ x: 100, y: 100 }]],
+                            boundingBox: { x: 100, y: 100, width: 50, height: 50 }
+                        };
+                        
+                        const result = scoreService.calculateScore(mockRecognitionResult, 'あ', mockDrawingData);
+                        return result && ['excellent', 'good', 'fair', 'poor'].includes(result.level);
+                    }
+                },
+                {
+                    name: 'エラーハンドリング統合',
+                    test: () => {
+                        const errorHandler = new ErrorHandler();
+                        
+                        // エラー処理テスト
+                        const testError = {
+                            type: 'test',
+                            message: 'テストエラー',
+                            timestamp: Date.now()
+                        };
+                        
+                        const result = errorHandler.handleError(testError);
+                        return result && result.handled;
+                    }
+                },
+                {
+                    name: '完全フロー統合テスト',
+                    test: async () => {
+                        const app = new App();
+                        await app.init();
+                        
+                        // 練習開始
+                        app.startPractice();
+                        if (app.currentScreen !== 'practice-view') return false;
+                        
+                        // 描画データを模擬
+                        app.drawingService.drawingData = {
+                            strokes: [[{ x: 100, y: 100, timestamp: Date.now() }]],
+                            timestamp: Date.now(),
+                            boundingBox: { x: 100, y: 100, width: 50, height: 50 }
+                        };
+                        
+                        // 描画提出
+                        await app.submitDrawing();
+                        
+                        return app.currentScreen === 'result-view';
+                    }
+                }
+            ];
+
+            totalTests = tests.length;
+            currentTestIndex = 0;
+
+            for (const test of tests) {
+                try {
+                    const result = await test.test();
+                    addTestResult('integration-results', test.name, !!result);
+                } catch (error) {
+                    addTestResult('integration-results', test.name, false, error.message);
+                    addTestResult('error-log', `統合テストエラー: ${test.name}`, false, error.stack);
+                }
+                
+                currentTestIndex++;
+                updateProgress(currentTestIndex, totalTests);
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+        }
+
+        // パフォーマンステスト
+        async function runPerformanceTests() {
+            const tests = [
+                {
+                    name: '描画パフォーマンス',
+                    test: () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = 400;
+                        canvas.height = 400;
+                        
+                        const drawingService = new DrawingService();
+                        drawingService.initCanvas(canvas);
+                        
+                        const startTime = performance.now();
+                        
+                        // 大量の描画操作
+                        for (let i = 0; i < 100; i++) {
+                            drawingService.startDrawing(i, i);
+                            for (let j = 0; j < 10; j++) {
+                                drawingService.addPoint(i + j, i + j);
+                            }
+                            drawingService.endDrawing();
+                        }
+                        
+                        const endTime = performance.now();
+                        const duration = endTime - startTime;
+                        
+                        return { passed: duration < 1000, duration: `${duration.toFixed(2)}ms` };
+                    }
+                },
+                {
+                    name: '認識パフォーマンス',
+                    test: () => {
+                        const recognitionService = new RecognitionService();
+                        const mockDrawingData = {
+                            strokes: Array.from({ length: 10 }, (_, i) => 
+                                Array.from({ length: 20 }, (_, j) => ({
+                                    x: i * 10 + j,
+                                    y: i * 10 + j,
+                                    timestamp: Date.now() + j
+                                }))
+                            ),
+                            timestamp: Date.now(),
+                            boundingBox: { x: 0, y: 0, width: 200, height: 200 }
+                        };
+                        
+                        const startTime = performance.now();
+                        
+                        // 複数回認識実行
+                        for (let i = 0; i < 10; i++) {
+                            recognitionService.recognizeCharacter(mockDrawingData, 'あ');
+                        }
+                        
+                        const endTime = performance.now();
+                        const duration = endTime - startTime;
+                        
+                        return { passed: duration < 500, duration: `${duration.toFixed(2)}ms` };
+                    }
+                },
+                {
+                    name: 'メモリ使用量',
+                    test: () => {
+                        if (!performance.memory) {
+                            return { passed: true, message: 'メモリ情報取得不可' };
+                        }
+                        
+                        const initialMemory = performance.memory.usedJSHeapSize;
+                        
+                        // メモリを使用する操作
+                        const app = new App();
+                        const largeData = Array.from({ length: 10000 }, (_, i) => ({
+                            id: i,
+                            data: `test data ${i}`.repeat(100)
+                        }));
+                        
+                        const finalMemory = performance.memory.usedJSHeapSize;
+                        const memoryIncrease = finalMemory - initialMemory;
+                        
+                        return { 
+                            passed: memoryIncrease < 50 * 1024 * 1024, // 50MB以下
+                            memory: `${(memoryIncrease / 1024 / 1024).toFixed(2)}MB増加`
+                        };
+                    }
+                }
+            ];
+
+            totalTests = tests.length;
+            currentTestIndex = 0;
+
+            for (const test of tests) {
+                try {
+                    const result = test.test();
+                    const passed = result.passed !== undefined ? result.passed : !!result;
+                    const message = result.duration || result.memory || result.message || '';
+                    addTestResult('performance-results', test.name, passed, message);
+                } catch (error) {
+                    addTestResult('performance-results', test.name, false, error.message);
+                    addTestResult('error-log', `パフォーマンステストエラー: ${test.name}`, false, error.stack);
+                }
+                
+                currentTestIndex++;
+                updateProgress(currentTestIndex, totalTests);
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+
+        // 全テスト実行
+        window.runAllTests = async function() {
+            // 結果をクリア
+            ['browser-support', 'integration-results', 'performance-results', 'error-log'].forEach(id => {
+                document.getElementById(id).innerHTML = '';
+            });
+            testResults = [];
+            
+            document.getElementById('test-status').textContent = 'テスト開始...';
+            
+            try {
+                await runBrowserTests();
+                await runIntegrationTests();
+                await runPerformanceTests();
+                
+                const totalPassed = testResults.filter(r => r.passed).length;
+                const totalFailed = testResults.filter(r => !r.passed).length;
+                
+                document.getElementById('test-status').innerHTML = `
+                    <strong>テスト完了</strong><br>
+                    成功: ${totalPassed}, 失敗: ${totalFailed}, 合計: ${testResults.length}
+                `;
+                
+                // 結果をLocalStorageに保存
+                localStorage.setItem('hiragana_test_results', JSON.stringify({
+                    timestamp: new Date().toISOString(),
+                    results: testResults,
+                    summary: { passed: totalPassed, failed: totalFailed, total: testResults.length }
+                }));
+                
+            } catch (error) {
+                document.getElementById('test-status').textContent = `テスト実行エラー: ${error.message}`;
+                addTestResult('error-log', 'テスト実行エラー', false, error.stack);
+            }
+        };
+
+        // 個別テスト実行関数をグローバルに公開
+        window.runBrowserTests = runBrowserTests;
+        window.runIntegrationTests = runIntegrationTests;
+        window.runPerformanceTests = runPerformanceTests;
+
+        // ページ読み込み時にブラウザ情報を表示
+        document.addEventListener('DOMContentLoaded', () => {
+            const info = document.createElement('div');
+            info.className = 'test-info';
+            info.innerHTML = `
+                <strong>ブラウザ情報</strong><br>
+                User Agent: ${navigator.userAgent}<br>
+                Platform: ${navigator.platform}<br>
+                Language: ${navigator.language}<br>
+                Screen: ${screen.width}x${screen.height}<br>
+                Device Pixel Ratio: ${window.devicePixelRatio || 1}
+            `;
+            document.getElementById('browser-support').appendChild(info);
+        });
+    </script>
+</body>
+</html>

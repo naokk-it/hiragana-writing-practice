@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>認識・採点機能テスト</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .test-result {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+
+        .test-pass {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .test-fail {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .test-summary {
+            font-weight: bold;
+            font-size: 18px;
+            margin-top: 20px;
+        }
+
+        .test-details {
+            font-size: 12px;
+            color: #666;
+            margin-left: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>認識・採点機能テスト</h1>
+
+    <div class="test-container">
+        <h2>RecognitionService テスト</h2>
+        <div id="recognition-service-tests"></div>
+    </div>
+
+    <div class="test-container">
+        <h2>ScoreService テスト</h2>
+        <div id="score-service-tests"></div>
+    </div>
+
+    <div class="test-container">
+        <h2>統合テスト</h2>
+        <div id="integration-tests"></div>
+    </div>
+
+    <div id="test-summary" class="test-summary"></div>
+
+    <script type="module">
+        import { RecognitionService } from './js/services/RecognitionService.js';
+        import { ScoreService } from './js/services/ScoreService.js';
+
+        let testResults = [];
+
+        function addTestResult(testName, passed, message = '', containerId = 'recognition-service-tests') {
+            testResults.push({ testName, passed, message });
+            const container = document.getElementById(containerId);
+            const div = document.createElement('div');
+            div.className = passed ? 'test-result test-pass' : 'test-result test-fail';
+            div.innerHTML = `${passed ? '✓' : '✗'} ${testName}${message ? '<div class="test-details">' + message + '</div>' : ''}`;
+            container.appendChild(div);
+        }
+
+        // RecognitionService テスト
+        function testRecognitionService() {
+            const service = new RecognitionService();
+
+            // 基本初期化テスト
+            addTestResult('RecognitionService インスタンス作成', 
+                service instanceof RecognitionService);
+
+            addTestResult('文字テンプレート初期化', 
+                service.characterTemplates && 
+                service.characterTemplates['あ'] && 
+                service.characterTemplates['あ'].strokeCount === 3);
+
+            // 空の描画データテスト
+            const emptyResult = service.recognizeCharacter(null);
+            addTestResult('空の描画データ処理', 
+                emptyResult.character === null && 
+                emptyResult.confidence === 0 && 
+                emptyResult.recognized === false);
+
+            // 有効な描画データテスト
+            const validDrawingData = {
+                strokes: [
+                    [{ x: 10, y: 10 }, { x: 50, y: 10 }], // 水平線
+                    [{ x: 30, y: 5 }, { x: 30, y: 60 }],  // 垂直線
+                    [{ x: 20, y: 30 }, { x: 40, y: 50 }]  // 斜線
+                ],
+                boundingBox: { x: 10, y: 5, width: 40, height: 55 }
+            };
+
+            const validResult = service.recognizeCharacter(validDrawingData, 'あ');
+            addTestResult('有効な描画データ認識', 
+                validResult.character === 'あ' && 
+                validResult.confidence > 0 && 
+                validResult.recognized === true,
+                `信頼度: ${validResult.confidence.toFixed(3)}`);
+
+            // 類似度計算テスト
+            const drawing = {
+                strokeCount: 3,
+                features: { hasHorizontalLine: true, hasVerticalLine: true, hasCurve: true },
+                complexity: 0.7
+            };
+            const template = service.characterTemplates['あ'];
+            const similarity = service.calculateSimilarity(drawing, template);
+            addTestResult('類似度計算', 
+                similarity > 0.5 && similarity <= 1,
+                `類似度: ${similarity.toFixed(3)}`);
+
+            // 前処理テスト
+            const preprocessed = service.preprocessDrawing(validDrawingData);
+            addTestResult('描画データ前処理', 
+                preprocessed && 
+                preprocessed.strokeCount === 3 && 
+                preprocessed.features && 
+                preprocessed.complexity >= 0,
+                `ストローク数: ${preprocessed.strokeCount}, 複雑度: ${preprocessed.complexity.toFixed(3)}`);
+
+            // 特徴抽出テスト
+            const horizontalStrokes = [[
+                { x: 0, y: 0.5 },
+                { x: 0.2, y: 0.5 },
+                { x: 0.4, y: 0.5 }
+            ]];
+            const features = service.extractFeatures(horizontalStrokes);
+            addTestResult('水平線特徴検出', 
+                features.hasHorizontalLine === true);
+
+            const verticalStrokes = [[
+                { x: 0.5, y: 0 },
+                { x: 0.5, y: 0.2 },
+                { x: 0.5, y: 0.4 }
+            ]];
+            const verticalFeatures = service.extractFeatures(verticalStrokes);
+            addTestResult('垂直線特徴検出', 
+                verticalFeatures.hasVerticalLine === true);
+        }
+
+        // ScoreService テスト
+        function testScoreService() {
+            const service = new ScoreService();
+
+            // 基本初期化テスト
+            addTestResult('ScoreService インスタンス作成', 
+                service instanceof ScoreService, '', 'score-service-tests');
+
+            addTestResult('フィードバックメッセージ初期化', 
+                service.feedbackMessages && 
+                service.feedbackMessages.excellent && 
+                service.feedbackMessages.fair && 
+                service.feedbackMessages.poor, '', 'score-service-tests');
+
+            // 描画なしテスト
+            const noDrawingResult = service.calculateScore({}, 'あ', null);
+            addTestResult('描画なしの採点', 
+                noDrawingResult.level === 'poor' && 
+                noDrawingResult.confidence === 0 && 
+                noDrawingResult.details.reason === 'no_drawing', '', 'score-service-tests');
+
+            // 認識失敗テスト
+            const drawingData = { strokes: [[{ x: 10, y: 10 }]] };
+            const failedRecognition = { recognized: false };
+            const failedResult = service.calculateScore(failedRecognition, 'あ', drawingData);
+            addTestResult('認識失敗の採点', 
+                failedResult.level === 'poor' && 
+                failedResult.details.reason === 'recognition_failed', '', 'score-service-tests');
+
+            // 成功した認識の採点テスト
+            const goodDrawingData = {
+                strokes: [
+                    [{ x: 20, y: 20 }, { x: 80, y: 20 }],
+                    [{ x: 50, y: 10 }, { x: 50, y: 90 }],
+                    [{ x: 30, y: 60 }, { x: 70, y: 60 }]
+                ],
+                boundingBox: { x: 20, y: 10, width: 60, height: 80 }
+            };
+            const goodRecognition = {
+                recognized: true,
+                confidence: 0.85,
+                details: {
+                    similarity: 0.9,
+                    expectedStrokes: 3
+                }
+            };
+            const goodResult = service.calculateScore(goodRecognition, 'あ', goodDrawingData);
+            addTestResult('良い描画の採点', 
+                goodResult.level === 'excellent' && 
+                goodResult.score > 0.7, 
+                `レベル: ${goodResult.level}, スコア: ${goodResult.score.toFixed(3)}`, 'score-service-tests');
+
+            // フィードバック生成テスト
+            const feedback = service.generateFeedback(goodResult, goodRecognition, 'あ');
+            addTestResult('フィードバック生成', 
+                feedback.message && 
+                feedback.encouragement && 
+                feedback.icon && 
+                typeof feedback.showExample === 'boolean', 
+                `メッセージ: ${feedback.message}`, 'score-service-tests');
+
+            // 描画品質計算テスト
+            const quality = service.calculateDrawingQuality(goodDrawingData);
+            addTestResult('描画品質計算', 
+                quality > 0 && quality <= 1, 
+                `品質スコア: ${quality.toFixed(3)}`, 'score-service-tests');
+
+            // レベル判定テスト
+            const excellentLevel = service.determineLevel(0.8, goodRecognition, goodDrawingData);
+            addTestResult('優秀レベル判定', 
+                excellentLevel === 'excellent', '', 'score-service-tests');
+
+            const poorRecognition = {
+                confidence: 0.2,
+                details: { expectedStrokes: 3 }
+            };
+            const poorDrawingData = { strokes: [[]] };
+            const poorLevel = service.determineLevel(0.2, poorRecognition, poorDrawingData);
+            addTestResult('低レベル判定', 
+                poorLevel === 'poor', '', 'score-service-tests');
+        }
+
+        // 統合テスト
+        function testIntegration() {
+            const recognitionService = new RecognitionService();
+            const scoreService = new ScoreService();
+
+            // 完全なワークフローテスト
+            const testDrawingData = {
+                strokes: [
+                    [{ x: 10, y: 10 }, { x: 50, y: 10 }, { x: 90, y: 10 }], // 水平線
+                    [{ x: 50, y: 5 }, { x: 50, y: 30 }, { x: 50, y: 60 }],  // 垂直線
+                    [{ x: 20, y: 40 }, { x: 40, y: 50 }, { x: 60, y: 45 }]  // 曲線
+                ],
+                boundingBox: { x: 10, y: 5, width: 80, height: 55 }
+            };
+
+            // 認識実行
+            const recognitionResult = recognitionService.recognizeCharacter(testDrawingData, 'あ');
+            
+            // 採点実行
+            const scoreResult = scoreService.calculateScore(recognitionResult, 'あ', testDrawingData);
+            
+            // フィードバック生成
+            const feedback = scoreService.generateFeedback(scoreResult, recognitionResult, 'あ');
+
+            addTestResult('完全ワークフロー', 
+                recognitionResult.recognized && 
+                scoreResult.level && 
+                feedback.message, 
+                `認識: ${recognitionResult.character} (${recognitionResult.confidence.toFixed(3)}), 採点: ${scoreResult.level} (${scoreResult.score.toFixed(3)})`, 
+                'integration-tests');
+
+            // 様々な描画パターンのテスト
+            const testCases = [
+                {
+                    name: '正確な描画',
+                    data: {
+                        strokes: [
+                            Array.from({ length: 10 }, (_, i) => ({ x: i * 5, y: 20 })),
+                            Array.from({ length: 10 }, (_, i) => ({ x: 25, y: i * 4 })),
+                            Array.from({ length: 10 }, (_, i) => ({ x: 15 + i, y: 30 }))
+                        ],
+                        boundingBox: { x: 0, y: 0, width: 50, height: 40 }
+                    }
+                },
+                {
+                    name: '雑な描画',
+                    data: {
+                        strokes: [
+                            [{ x: 15, y: 25 }, { x: 85, y: 18 }],
+                            [{ x: 48, y: 12 }],
+                            [{ x: 28, y: 65 }, { x: 72, y: 58 }]
+                        ],
+                        boundingBox: { x: 15, y: 12, width: 70, height: 53 }
+                    }
+                }
+            ];
+
+            testCases.forEach(testCase => {
+                const recognition = recognitionService.recognizeCharacter(testCase.data, 'あ');
+                const score = scoreService.calculateScore(recognition, 'あ', testCase.data);
+                
+                addTestResult(`${testCase.name}パターン`, 
+                    recognition.recognized && score.level, 
+                    `信頼度: ${recognition.confidence.toFixed(3)}, レベル: ${score.level}`, 
+                    'integration-tests');
+            });
+
+            // エラーハンドリングテスト
+            const nullRecognition = recognitionService.recognizeCharacter(null);
+            const nullScore = scoreService.calculateScore(nullRecognition, 'あ', null);
+            
+            addTestResult('エラーハンドリング', 
+                !nullRecognition.recognized && 
+                nullScore.level === 'poor', 
+                'null入力の適切な処理', 
+                'integration-tests');
+        }
+
+        // テスト実行
+        function runAllTests() {
+            console.log('テスト開始...');
+            
+            try {
+                testRecognitionService();
+                testScoreService();
+                testIntegration();
+            } catch (error) {
+                addTestResult('テスト実行エラー', false, error.message, 'integration-tests');
+            }
+
+            // テスト結果サマリー
+            const passed = testResults.filter(r => r.passed).length;
+            const total = testResults.length;
+            const summary = document.getElementById('test-summary');
+            summary.innerHTML = `テスト結果: ${passed}/${total} 成功 (${((passed/total)*100).toFixed(1)}%)`;
+            summary.className = passed === total ? 'test-summary test-pass' : 'test-summary test-fail';
+
+            console.log(`テスト完了: ${passed}/${total} 成功`);
+        }
+
+        // ページ読み込み後にテスト実行
+        document.addEventListener('DOMContentLoaded', runAllTests);
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>難易度選択機能テスト</title>
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+    <div id="app">
+        <div id="main-menu" class="screen active">
+            <!-- MainMenuComponent will render here -->
+        </div>
+        <div id="practice-view" class="screen">
+            <div class="practice-content">
+                <h2>練習画面</h2>
+                <p>難易度別練習が開始されました</p>
+                <div id="current-character" style="font-size: 4rem; text-align: center; margin: 20px;">あ</div>
+                <button onclick="backToMenu()" class="back-button">メニューに戻る</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { App } from './js/app.js';
+        
+        // アプリケーションを初期化
+        const app = new App();
+        
+        // テスト用のグローバル関数
+        window.backToMenu = function() {
+            app.showScreen('main-menu');
+        };
+        
+        // アプリケーションを開始
+        app.init().then(() => {
+            console.log('難易度選択機能テストアプリが開始されました');
+        }).catch(error => {
+            console.error('アプリケーション初期化エラー:', error);
+        });
+    </script>
+</body>
+</html>

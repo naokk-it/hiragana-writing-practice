@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文字表示機能テスト</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .test-result {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+        .test-pass {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .test-fail {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .character-display {
+            text-align: center;
+            margin: 20px 0;
+        }
+        #test-character {
+            font-size: 4rem;
+            font-weight: bold;
+        }
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        button {
+            margin: 5px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>文字表示機能テスト</h1>
+
+    <div class="test-container">
+        <h2>HiraganaCharacter テスト</h2>
+        <div id="hiragana-character-tests"></div>
+    </div>
+
+    <div class="test-container">
+        <h2>HiraganaDataService テスト</h2>
+        <div id="hiragana-data-service-tests"></div>
+    </div>
+
+    <div class="test-container">
+        <h2>CharacterDisplayComponent テスト</h2>
+        <div class="character-display">
+            <span id="test-character">あ</span>
+        </div>
+        <div class="controls">
+            <button onclick="testPrevious()">前の文字</button>
+            <button onclick="testNext()">次の文字</button>
+            <button onclick="testSpecific()">「う」を表示</button>
+            <button onclick="testRefresh()">リフレッシュ</button>
+        </div>
+        <div id="character-display-tests"></div>
+    </div>
+
+    <div id="test-summary" style="font-weight: bold; font-size: 18px; margin-top: 20px;"></div>
+
+    <script type="module">
+        // テスト対象のクラスをインポート
+        import { HiraganaDataService } from './js/services/HiraganaDataService.js';
+        import { CharacterDisplayComponent } from './js/components/CharacterDisplayComponent.js';
+
+        let testResults = [];
+        let characterDisplay;
+        let mockApp;
+
+        function addTestResult(containerId, testName, passed, message = '') {
+            testResults.push({ testName, passed, message });
+            const container = document.getElementById(containerId);
+            const div = document.createElement('div');
+            div.className = passed ? 'test-result test-pass' : 'test-result test-fail';
+            div.textContent = `${passed ? '✓' : '✗'} ${testName}${message ? ': ' + message : ''}`;
+            container.appendChild(div);
+        }
+
+        // HiraganaCharacterテスト（簡易版）
+        function testHiraganaCharacter() {
+            try {
+                // HiraganaCharacterクラスを直接テストできないので、HiraganaDataServiceを通してテスト
+                const service = new HiraganaDataService();
+                const char = service.getCurrentCharacter();
+                
+                addTestResult('hiragana-character-tests', 'HiraganaCharacter作成', 
+                    char && char.character && char.reading && char.difficulty);
+                
+                addTestResult('hiragana-character-tests', 'getInfo()メソッド', 
+                    char.getInfo && typeof char.getInfo === 'function');
+                
+                const info = char.getInfo();
+                addTestResult('hiragana-character-tests', 'getInfo()戻り値', 
+                    info.character === char.character && info.reading === char.reading);
+                
+                addTestResult('hiragana-character-tests', 'isValid()メソッド', 
+                    char.isValid && char.isValid() === true);
+                
+            } catch (error) {
+                addTestResult('hiragana-character-tests', 'HiraganaCharacterテスト', false, error.message);
+            }
+        }
+
+        // HiraganaDataServiceテスト
+        function testHiraganaDataService() {
+            try {
+                const service = new HiraganaDataService();
+                
+                addTestResult('hiragana-data-service-tests', 'サービス作成', 
+                    service && service.characters && service.characters.length > 0);
+                
+                const initialChar = service.getCurrentCharacter();
+                addTestResult('hiragana-data-service-tests', '初期文字取得', 
+                    initialChar && initialChar.character === 'あ');
+                
+                const nextChar = service.getNextCharacter();
+                addTestResult('hiragana-data-service-tests', '次の文字取得', 
+                    nextChar && nextChar.character === 'い');
+                
+                const prevChar = service.getPreviousCharacter();
+                addTestResult('hiragana-data-service-tests', '前の文字取得', 
+                    prevChar && prevChar.character === 'あ');
+                
+                const selectedChar = service.selectCharacter('う');
+                addTestResult('hiragana-data-service-tests', '文字選択', 
+                    selectedChar && selectedChar.character === 'う');
+                
+                const allChars = service.getAllCharacters();
+                addTestResult('hiragana-data-service-tests', '全文字取得', 
+                    Array.isArray(allChars) && allChars.length === 15);
+                
+                addTestResult('hiragana-data-service-tests', '文字数取得', 
+                    service.getCharacterCount() === 15);
+                
+            } catch (error) {
+                addTestResult('hiragana-data-service-tests', 'HiraganaDataServiceテスト', false, error.message);
+            }
+        }
+
+        // CharacterDisplayComponentテスト
+        function testCharacterDisplayComponent() {
+            try {
+                const hiraganaService = new HiraganaDataService();
+                mockApp = {
+                    getHiraganaDataService: () => hiraganaService
+                };
+                
+                characterDisplay = new CharacterDisplayComponent(mockApp);
+                
+                addTestResult('character-display-tests', 'コンポーネント作成', 
+                    characterDisplay && characterDisplay.app === mockApp);
+                
+                // 初期化テスト
+                characterDisplay.init('test-container', 'test-character', false);
+                addTestResult('character-display-tests', 'コンポーネント初期化', 
+                    characterDisplay.displayElement === document.getElementById('test-character'));
+                
+                // 表示更新テスト
+                characterDisplay.updateDisplay();
+                const displayElement = document.getElementById('test-character');
+                addTestResult('character-display-tests', '表示更新', 
+                    displayElement.textContent === 'あ');
+                
+                addTestResult('character-display-tests', '現在文字取得', 
+                    characterDisplay.getCurrentCharacter().character === 'あ');
+                
+            } catch (error) {
+                addTestResult('character-display-tests', 'CharacterDisplayComponentテスト', false, error.message);
+            }
+        }
+
+        // インタラクティブテスト用のグローバル関数
+        window.testNext = function() {
+            if (characterDisplay) {
+                characterDisplay.showNextCharacter();
+                const current = characterDisplay.getCurrentCharacter();
+                console.log('次の文字:', current.character);
+            }
+        };
+
+        window.testPrevious = function() {
+            if (characterDisplay) {
+                characterDisplay.showPreviousCharacter();
+                const current = characterDisplay.getCurrentCharacter();
+                console.log('前の文字:', current.character);
+            }
+        };
+
+        window.testSpecific = function() {
+            if (characterDisplay) {
+                characterDisplay.showCharacter('う');
+                const current = characterDisplay.getCurrentCharacter();
+                console.log('指定文字:', current.character);
+            }
+        };
+
+        window.testRefresh = function() {
+            if (characterDisplay) {
+                characterDisplay.refresh();
+                const current = characterDisplay.getCurrentCharacter();
+                console.log('リフレッシュ:', current.character);
+            }
+        };
+
+        // 全テスト実行
+        function runAllTests() {
+            testHiraganaCharacter();
+            testHiraganaDataService();
+            testCharacterDisplayComponent();
+
+            // テスト結果サマリー
+            const passed = testResults.filter(r => r.passed).length;
+            const total = testResults.length;
+            const summary = document.getElementById('test-summary');
+            summary.innerHTML = `テスト結果: ${passed}/${total} 成功`;
+            summary.style.color = passed === total ? 'green' : 'red';
+        }
+
+        // ページ読み込み後にテスト実行
+        document.addEventListener('DOMContentLoaded', runAllTests);
+    </script>
+</body>
+</html>

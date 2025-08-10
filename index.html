@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ひらがな手書き練習</title>
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+    <div id="app">
+        <!-- メインメニュー -->
+        <div id="main-menu" class="screen active">
+            <h1>ひらがな練習</h1>
+            <button id="start-practice-btn" class="big-button">練習をはじめる</button>
+        </div>
+
+        <!-- 練習画面 -->
+        <div id="practice-view" class="screen">
+            <div class="character-display" id="practice-character-display">
+                <span id="target-character">あ</span>
+            </div>
+            <div class="canvas-container">
+                <canvas id="drawing-canvas" width="400" height="400"></canvas>
+            </div>
+            <div class="practice-controls">
+                <button id="show-example-btn" class="control-button">手本を見る</button>
+                <button id="clear-canvas-btn" class="control-button">消す</button>
+                <button id="submit-drawing-btn" class="control-button">できた！</button>
+            </div>
+        </div>
+
+        <!-- 手本表示画面 -->
+        <div id="example-view" class="screen">
+            <div class="character-display" id="example-character-display">
+                <div class="example-display">
+                    <span id="example-character">あ</span>
+                </div>
+            </div>
+            <button id="back-to-practice-btn" class="control-button">練習に戻る</button>
+        </div>
+
+        <!-- 結果表示画面 -->
+        <div id="result-view" class="screen">
+            <div class="result-display">
+                <div id="score-icon">😊</div>
+                <div id="score-message">よくできました！</div>
+            </div>
+            <div class="result-controls">
+                <button id="try-again-btn" class="control-button">もう一度</button>
+                <button id="next-character-btn" class="control-button">次の文字</button>
+            </div>
+        </div>
+
+        <!-- 進捗表示画面 -->
+        <div id="progress-view" class="screen">
+            <!-- ProgressViewComponentによって動的に生成される -->
+        </div>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>

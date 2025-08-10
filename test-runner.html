@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>描画機能テスト</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .test-result {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+
+        .test-pass {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .test-fail {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .test-summary {
+            font-weight: bold;
+            font-size: 18px;
+            margin-top: 20px;
+        }
+
+        canvas {
+            border: 2px solid #333;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>描画機能テスト</h1>
+
+    <div class="test-container">
+        <h2>DrawingService テスト</h2>
+        <div id="drawing-service-tests"></div>
+    </div>
+
+    <div class="test-container">
+        <h2>タッチ操作テスト</h2>
+        <div id="touch-operation-tests"></div>
+    </div>
+
+    <div class="test-container">
+        <h2>実際の描画テスト</h2>
+        <p>以下のキャンバスに描画して動作を確認してください：</p>
+        <canvas id="test-canvas" width="400" height="400"></canvas>
+        <br>
+        <button onclick="clearTestCanvas()">クリア</button>
+        <button onclick="getDrawingData()">描画データ取得</button>
+        <div id="drawing-data-output"></div>
+    </div>
+
+    <div id="test-summary" class="test-summary"></div>
+
+    <script type="module">
+        import { DrawingService } from './js/services/DrawingService.js';
+
+        let testResults = [];
+        let drawingService;
+
+        function addTestResult(testName, passed, message = '') {
+            testResults.push({ testName, passed, message });
+            const container = document.getElementById('drawing-service-tests');
+            const div = document.createElement('div');
+            div.className = passed ? 'test-result test-pass' : 'test-result test-fail';
+            div.textContent = `${passed ? '✓' : '✗'} ${testName}${message ? ': ' + message : ''}`;
+            container.appendChild(div);
+        }
+
+        function addTouchTestResult(testName, passed, message = '') {
+            testResults.push({ testName, passed, message });
+            const container = document.getElementById('touch-operation-tests');
+            const div = document.createElement('div');
+            div.className = passed ? 'test-result test-pass' : 'test-result test-fail';
+            div.textContent = `${passed ? '✓' : '✗'} ${testName}${message ? ': ' + message : ''}`;
+            container.appendChild(div);
+        }
+
+        // DrawingService基本テスト
+        function testDrawingServiceBasics() {
+            try {
+                const service = new DrawingService();
+                addTestResult('DrawingService インスタンス作成', true);
+
+                // モックキャンバス作成
+                const canvas = document.createElement('canvas');
+                canvas.width = 400;
+                canvas.height = 400;
+
+                service.initCanvas(canvas);
+                addTestResult('Canvas初期化', service.canvas === canvas && service.ctx !== null);
+
+                // 描画データの初期状態
+                const initialData = service.getDrawingData();
+                addTestResult('初期描画データ',
+                    initialData.strokes.length === 0 &&
+                    initialData.timestamp === null
+                );
+
+                return service;
+            } catch (error) {
+                addTestResult('DrawingService基本テスト', false, error.message);
+                return null;
+            }
+        }
+
+        // 描画操作テスト
+        function testDrawingOperations(service) {
+            if (!service) return;
+
+            try {
+                // 描画開始
+                service.startDrawing(100, 150);
+                addTestResult('描画開始', service.isDrawing === true);
+
+                // ポイント追加
+                service.addPoint(110, 160);
+                service.addPoint(120, 170);
+                addTestResult('ポイント追加', service.currentStroke.length === 3);
+
+                // 描画終了
+                service.endDrawing();
+                addTestResult('描画終了',
+                    service.isDrawing === false &&
+                    service.drawingData.strokes.length === 1
+                );
+
+                // 境界ボックス計算
+                const boundingBox = service.calculateBoundingBox();
+                addTestResult('境界ボックス計算',
+                    boundingBox !== null &&
+                    boundingBox.x === 100 &&
+                    boundingBox.y === 150
+                );
+
+            } catch (error) {
+                addTestResult('描画操作テスト', false, error.message);
+            }
+        }
+
+        // 座標正規化テスト
+        function testCoordinateNormalization(service) {
+            if (!service) return;
+
+            try {
+                const mockEvent = {
+                    clientX: 200,
+                    clientY: 250
+                };
+
+                const coords = service.normalizeCoordinates(mockEvent);
+                addTestResult('座標正規化',
+                    coords.x === 200 && coords.y === 250
+                );
+
+            } catch (error) {
+                addTestResult('座標正規化テスト', false, error.message);
+            }
+        }
+
+        // タッチ操作シミュレーション
+        function testTouchOperations() {
+            try {
+                const service = new DrawingService();
+                const canvas = document.createElement('canvas');
+                canvas.width = 400;
+                canvas.height = 400;
+                service.initCanvas(canvas);
+
+                // タッチイベントシミュレーション
+                const touchEvent = {
+                    touches: [{
+                        clientX: 150,
+                        clientY: 200
+                    }]
+                };
+
+                const coords = service.normalizeCoordinates(touchEvent.touches[0]);
+                addTouchTestResult('タッチ座標取得',
+                    coords.x === 150 && coords.y === 200
+                );
+
+                // 複数タッチポイント
+                const multiTouchEvent = {
+                    touches: [
+                        { clientX: 100, clientY: 100 },
+                        { clientX: 200, clientY: 200 }
+                    ]
+                };
+
+                const firstTouch = service.normalizeCoordinates(multiTouchEvent.touches[0]);
+                addTouchTestResult('マルチタッチ（最初のポイント）',
+                    firstTouch.x === 100 && firstTouch.y === 100
+                );
+
+            } catch (error) {
+                addTouchTestResult('タッチ操作テスト', false, error.message);
+            }
+        }
+
+        // 実際の描画テスト用
+        function setupRealDrawingTest() {
+            const canvas = document.getElementById('test-canvas');
+            drawingService = new DrawingService();
+            drawingService.initCanvas(canvas);
+
+            // コールバック設定
+            drawingService.onDrawingStart = () => {
+                console.log('描画開始コールバック実行');
+            };
+
+            drawingService.onDrawingEnd = () => {
+                console.log('描画終了コールバック実行');
+            };
+        }
+
+        // グローバル関数
+        window.clearTestCanvas = function () {
+            if (drawingService) {
+                drawingService.clearCanvas();
+            }
+        };
+
+        window.getDrawingData = function () {
+            if (drawingService) {
+                const data = drawingService.getDrawingData();
+                const output = document.getElementById('drawing-data-output');
+                output.innerHTML = `
+                    <h4>描画データ:</h4>
+                    <p>ストローク数: ${data.strokes.length}</p>
+                    <p>タイムスタンプ: ${data.timestamp}</p>
+                    <p>境界ボックス: ${JSON.stringify(data.boundingBox)}</p>
+                `;
+            }
+        };
+
+        // テスト実行
+        function runAllTests() {
+            const service = testDrawingServiceBasics();
+            testDrawingOperations(service);
+            testCoordinateNormalization(service);
+            testTouchOperations();
+
+            // テスト結果サマリー
+            const passed = testResults.filter(r => r.passed).length;
+            const total = testResults.length;
+            const summary = document.getElementById('test-summary');
+            summary.innerHTML = `テスト結果: ${passed}/${total} 成功`;
+            summary.className = passed === total ? 'test-summary test-pass' : 'test-summary test-fail';
+
+            // 実際の描画テスト設定
+            setupRealDrawingTest();
+        }
+
+        // ページ読み込み後にテスト実行
+        document.addEventListener('DOMContentLoaded', runAllTests);
+    </script>
+</body>
+
+</html>
