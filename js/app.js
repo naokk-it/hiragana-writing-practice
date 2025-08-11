@@ -40,7 +40,7 @@ export class App {
         this.scoreService = new ScoreService();
         this.hiraganaDataService = new HiraganaDataService(this.errorHandler);
         this.dataStorageService = new DataStorageService();
-        this.dataMigrationService = new DataMigrationService(this.dataStorageService);
+        this.dataMigrationService = new DataMigrationService(this.dataStorageService, this.hiraganaDataService);
         this.progressTrackingService = new ProgressTrackingService(this.dataStorageService);
         this.randomizationService = new RandomizationService(this.hiraganaDataService, this.progressTrackingService, this.errorHandler);
         
@@ -194,6 +194,7 @@ export class App {
             this.appState.practiceMode = mode;
             this.appState.difficultyFilter = options.difficultyFilter || null;
             this.appState.categoryFilter = options.categoryFilter || null;
+            this.appState.strokeComplexityLevel = options.strokeComplexityLevel || null;
 
             // 練習セッションを開始
             this.startPracticeSession();
@@ -373,6 +374,19 @@ export class App {
                 }
                 return this.hiraganaDataService.getNextCharacter();
                 
+            case 'strokeComplexity':
+                if (this.appState.strokeComplexityLevel) {
+                    return this.randomizationService.selectNextCharacterByStrokeComplexity(
+                        currentChar ? currentChar.character : null,
+                        {
+                            strokeComplexityLevel: this.appState.strokeComplexityLevel,
+                            avoidRecent: true,
+                            useProgressWeighting: false
+                        }
+                    );
+                }
+                return this.hiraganaDataService.getNextCharacter();
+                
             default:
                 return this.hiraganaDataService.getRandomCharacter();
         }
@@ -387,6 +401,7 @@ export class App {
         this.appState.practiceMode = mode;
         this.appState.difficultyFilter = options.difficultyFilter || null;
         this.appState.categoryFilter = options.categoryFilter || null;
+        this.appState.strokeComplexityLevel = options.strokeComplexityLevel || null;
         
         console.log(`練習モード変更: ${mode}`, options);
     }

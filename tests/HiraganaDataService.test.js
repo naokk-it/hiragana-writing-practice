@@ -478,4 +478,134 @@ describe('HiraganaDataService', () => {
             });
         });
     });
+
+    describe('新しい画数・複雑さベースの難易度分類システム', () => {
+        test('getCharactersByStrokeComplexityが正しく動作する', () => {
+            const beginnerChars = service.getCharactersByStrokeComplexity('beginner');
+            const intermediateChars = service.getCharactersByStrokeComplexity('intermediate');
+            const advancedChars = service.getCharactersByStrokeComplexity('advanced');
+
+            // 各レベルに文字が含まれることを確認
+            expect(beginnerChars.length).toBeGreaterThan(0);
+            expect(intermediateChars.length).toBeGreaterThan(0);
+            expect(advancedChars.length).toBeGreaterThan(0);
+
+            // 全文字の合計が46文字になることを確認
+            const totalChars = beginnerChars.length + intermediateChars.length + advancedChars.length;
+            expect(totalChars).toBe(46);
+
+            // 各レベルの文字が正しい画数範囲にあることを確認
+            beginnerChars.forEach(char => {
+                expect(char.strokeCount).toBeLessThanOrEqual(2);
+            });
+
+            intermediateChars.forEach(char => {
+                expect(char.strokeCount).toBe(3);
+            });
+
+            advancedChars.forEach(char => {
+                expect(char.strokeCount).toBeGreaterThanOrEqual(4);
+            });
+        });
+
+        test('無効な難易度レベルで空配列が返される', () => {
+            const invalidLevel = service.getCharactersByStrokeComplexity('invalid');
+            expect(invalidLevel).toEqual([]);
+        });
+
+        test('getCharactersInPedagogicalOrderが正しく動作する', () => {
+            const beginnerChars = service.getCharactersInPedagogicalOrder('beginner');
+            const intermediateChars = service.getCharactersInPedagogicalOrder('intermediate');
+            const advancedChars = service.getCharactersInPedagogicalOrder('advanced');
+
+            // 各レベルに文字が含まれることを確認
+            expect(beginnerChars.length).toBeGreaterThan(0);
+            expect(intermediateChars.length).toBeGreaterThan(0);
+            expect(advancedChars.length).toBeGreaterThan(0);
+
+            // 教育的順序でソートされていることを確認
+            for (let i = 1; i < beginnerChars.length; i++) {
+                const prevOrder = beginnerChars[i-1].getPedagogicalOrder();
+                const currentOrder = beginnerChars[i].getPedagogicalOrder();
+                expect(prevOrder).toBeLessThanOrEqual(currentOrder);
+            }
+
+            for (let i = 1; i < intermediateChars.length; i++) {
+                const prevOrder = intermediateChars[i-1].getPedagogicalOrder();
+                const currentOrder = intermediateChars[i].getPedagogicalOrder();
+                expect(prevOrder).toBeLessThanOrEqual(currentOrder);
+            }
+
+            for (let i = 1; i < advancedChars.length; i++) {
+                const prevOrder = advancedChars[i-1].getPedagogicalOrder();
+                const currentOrder = advancedChars[i].getPedagogicalOrder();
+                expect(prevOrder).toBeLessThanOrEqual(currentOrder);
+            }
+        });
+
+        test('calculateComplexityScoreが正しく動作する', () => {
+            // 存在する文字の複雑さスコアを取得
+            const complexityA = service.calculateComplexityScore('あ');
+            const complexityKu = service.calculateComplexityScore('く');
+            const complexityKi = service.calculateComplexityScore('き');
+
+            // 複雑さスコアが0.0-1.0の範囲内であることを確認
+            expect(complexityA).toBeGreaterThanOrEqual(0.0);
+            expect(complexityA).toBeLessThanOrEqual(1.0);
+            expect(complexityKu).toBeGreaterThanOrEqual(0.0);
+            expect(complexityKu).toBeLessThanOrEqual(1.0);
+            expect(complexityKi).toBeGreaterThanOrEqual(0.0);
+            expect(complexityKi).toBeLessThanOrEqual(1.0);
+
+            // 複雑な文字（き）が簡単な文字（く）より高いスコアを持つことを確認
+            expect(complexityKi).toBeGreaterThan(complexityKu);
+        });
+
+        test('存在しない文字の複雑さスコアは0.0が返される', () => {
+            const complexity = service.calculateComplexityScore('存在しない文字');
+            expect(complexity).toBe(0.0);
+        });
+
+        test('getCharacterCountByStrokeComplexityが正しく動作する', () => {
+            const counts = service.getCharacterCountByStrokeComplexity();
+            
+            expect(counts).toBeDefined();
+            expect(typeof counts.beginner).toBe('number');
+            expect(typeof counts.intermediate).toBe('number');
+            expect(typeof counts.advanced).toBe('number');
+            
+            expect(counts.beginner).toBeGreaterThan(0);
+            expect(counts.intermediate).toBeGreaterThan(0);
+            expect(counts.advanced).toBeGreaterThan(0);
+            
+            // 合計が46文字になることを確認
+            const total = counts.beginner + counts.intermediate + counts.advanced;
+            expect(total).toBe(46);
+        });
+
+        test('画数複雑度キャッシュが正しく構築される', () => {
+            const memoryUsage = service.getMemoryUsage();
+            expect(memoryUsage.strokeComplexityCache).toBe(3); // beginner, intermediate, advanced
+        });
+
+        test('特定の文字が正しい難易度レベルに分類される', () => {
+            // 1画の文字（beginner）
+            const beginnerChars = service.getCharactersByStrokeComplexity('beginner');
+            const kuChar = beginnerChars.find(char => char.character === 'く');
+            expect(kuChar).toBeDefined();
+            expect(kuChar.getStrokeComplexityLevel()).toBe('beginner');
+
+            // 3画の文字（intermediate）
+            const intermediateChars = service.getCharactersByStrokeComplexity('intermediate');
+            const aChar = intermediateChars.find(char => char.character === 'あ');
+            expect(aChar).toBeDefined();
+            expect(aChar.getStrokeComplexityLevel()).toBe('intermediate');
+
+            // 4画以上の文字（advanced）
+            const advancedChars = service.getCharactersByStrokeComplexity('advanced');
+            const kiChar = advancedChars.find(char => char.character === 'き');
+            expect(kiChar).toBeDefined();
+            expect(kiChar.getStrokeComplexityLevel()).toBe('advanced');
+        });
+    });
 });

@@ -311,6 +311,77 @@ export class RecognitionService {
         };
     }
 
+    /**
+     * 子供向けの寛容な文字認識
+     * @param {Object} drawingData 描画データ
+     * @param {string} targetCharacter ターゲット文字
+     * @returns {Promise<Object>} 認識結果
+     */
+    async recognizeCharacterForChild(drawingData, targetCharacter = 'あ') {
+        try {
+            if (!drawingData || drawingData.strokes.length === 0) {
+                return {
+                    character: null,
+                    confidence: 0,
+                    recognized: false,
+                    details: {
+                        message: '描画データがありません',
+                        encouragementLevel: 'poor',
+                        childFriendlyScore: 0
+                    }
+                };
+            }
+
+            // 子供向け前処理を適用
+            const preprocessed = this.preprocessDrawing(drawingData);
+            if (!preprocessed) {
+                return {
+                    character: null,
+                    confidence: 0,
+                    recognized: false,
+                    details: {
+                        message: '前処理に失敗しました',
+                        encouragementLevel: 'poor',
+                        childFriendlyScore: 0
+                    }
+                };
+            }
+
+            // ターゲット文字のテンプレートを遅延読み込み
+            const template = await this.loadCharacterTemplate(targetCharacter);
+            if (!template) {
+                console.warn(`文字テンプレートが見つかりません: ${targetCharacter}`);
+                return this.createEncouragingFallback(targetCharacter, preprocessed);
+            }
+
+            // 寛容な形状マッチング実行
+            const similarity = this.calculateLenientSimilarity(preprocessed, template);
+            const confidence = this.calculateEncouragingConfidence(similarity, preprocessed, template);
+
+            const result = {
+                character: targetCharacter,
+                confidence: confidence,
+                recognized: confidence >= 0.2, // 寛容な認識基準
+                details: {
+                    similarity: similarity,
+                    strokeCount: preprocessed.strokeCount,
+                    expectedStrokes: template.strokeCount,
+                    features: preprocessed.features,
+                    childFriendlyScore: confidence,
+                    encouragementLevel: this.getEncouragementLevel(confidence),
+                    normalizedForChild: true
+                }
+            };
+
+            console.log('子供向け文字認識実行:', result);
+            return result;
+            
+        } catch (error) {
+            console.error('子供向け文字認識エラー:', error);
+            return this.handleChildRecognitionError(error, targetCharacter);
+        }
+    }
+
     async recognizeCharacter(drawingData, targetCharacter = 'あ') {
         try {
             if (!drawingData || drawingData.strokes.length === 0) {
@@ -408,6 +479,184 @@ export class RecognitionService {
         return factors > 0 ? similarity / factors : 0;
     }
 
+    /**
+     * 子供向けの寛容な類似度計算
+     * @param {Object} drawing 描画データ
+     * @param {Object} template テンプレートデータ
+     * @returns {number} 寛容な類似度
+     */
+    calculateLenientSimilarity(drawing, template) {
+        if (!drawing || !template) return 0;
+
+        let similarity = 0;
+        let factors = 0;
+
+        // ストローク数の類似度（より寛容に、重要度: 20%）
+        const strokeSimilarity = this.calculateLenientStrokeSimilarity(
+            drawing.strokeCount, 
+            template.strokeCount
+        );
+        similarity += strokeSimilarity * 0.2;
+        factors += 0.2;
+
+        // 形状特徴の類似度（より寛容に、重要度: 40%）
+        const featureSimilarity = this.calculateLenientFeatureSimilarity(
+            drawing.features, 
+            template.features
+        );
+        similarity += featureSimilarity * 0.4;
+        factors += 0.4;
+
+        // 複雑度の類似度（より寛容に、重要度: 15%）
+        const complexitySimilarity = this.calculateLenientComplexitySimilarity(
+            drawing.complexity, 
+            template.features.complexity
+        );
+        similarity += complexitySimilarity * 0.15;
+        factors += 0.15;
+
+        // 努力評価（新規、重要度: 25%）
+        const effortScore = this.calculateEffortScore(drawing, template);
+        similarity += effortScore * 0.25;
+        factors += 0.25;
+
+        return factors > 0 ? similarity / factors : 0;
+    }
+
+    /**
+     * 寛容なストローク数類似度計算
+     * @param {number} actualStrokes 実際のストローク数
+     * @param {number} expectedStrokes 期待されるストローク数
+     * @returns {number} 寛容な類似度
+     */
+    calculateLenientStrokeSimilarity(actualStrokes, expectedStrokes) {
+        if (expectedStrokes === 0) return actualStrokes === 0 ? 1 : 0.5;
+        
+        const difference = Math.abs(actualStrokes - expectedStrokes);
+        
+        // より寛容な評価：差が1以下なら高評価
+        if (difference === 0) return 1.0;
+        if (difference === 1) return 0.8;
+        if (difference === 2) return 0.6;
+        if (difference <= expectedStrokes) return 0.4;
+        
+        return 0.2; // 大きく異なっても最低点は保証
+    }
+
+    /**
+     * 寛容な特徴類似度計算
+     * @param {Object} actualFeatures 実際の特徴
+     * @param {Object} expectedFeatures 期待される特徴
+     * @returns {number} 寛容な類似度
+     */
+    calculateLenientFeatureSimilarity(actualFeatures, expectedFeatures) {
+        if (!actualFeatures || !expectedFeatures) return 0.3; // デフォルト値
+
+        let matches = 0;
+        let partialMatches = 0;
+        let total = 0;
+
+        // 各特徴の比較（より寛容に）
+        for (const feature in expectedFeatures) {
+            if (feature === 'complexity') continue;
+            
+            total++;
+            if (actualFeatures[feature] === expectedFeatures[feature]) {
+                matches++;
+            } else {
+                // 部分的マッチも評価（例：曲線があるべきところに直線がある場合）
+                if (this.isPartialFeatureMatch(feature, actualFeatures[feature], expectedFeatures[feature])) {
+                    partialMatches++;
+                }
+            }
+        }
+
+        if (total === 0) return 0.5;
+
+        // 完全マッチ + 部分マッチの評価
+        const fullMatchScore = matches / total;
+        const partialMatchScore = (partialMatches / total) * 0.5;
+        
+        return Math.min(1.0, fullMatchScore + partialMatchScore + 0.2); // 基本点を追加
+    }
+
+    /**
+     * 部分的特徴マッチをチェック
+     * @param {string} feature 特徴名
+     * @param {*} actual 実際の値
+     * @param {*} expected 期待される値
+     * @returns {boolean} 部分マッチするか
+     */
+    isPartialFeatureMatch(feature, actual, expected) {
+        // 線の種類での部分マッチ
+        if (feature === 'hasHorizontalLine' || feature === 'hasVerticalLine') {
+            // 線があるべきところになくても、他の線があれば部分的にOK
+            return actual === true;
+        }
+        
+        if (feature === 'hasCurve') {
+            // 曲線があるべきところに直線があっても部分的にOK
+            return true;
+        }
+        
+        return false;
+    }
+
+    /**
+     * 寛容な複雑度類似度計算
+     * @param {number} actualComplexity 実際の複雑度
+     * @param {number} expectedComplexity 期待される複雑度
+     * @returns {number} 寛容な類似度
+     */
+    calculateLenientComplexitySimilarity(actualComplexity, expectedComplexity) {
+        if (typeof actualComplexity !== 'number' || typeof expectedComplexity !== 'number') {
+            return 0.6; // デフォルト値（寛容に）
+        }
+
+        const difference = Math.abs(actualComplexity - expectedComplexity);
+        
+        // より寛容な複雑度評価
+        if (difference < 0.2) return 1.0;
+        if (difference < 0.4) return 0.8;
+        if (difference < 0.6) return 0.6;
+        
+        return 0.4; // 大きく異なっても最低点は保証
+    }
+
+    /**
+     * 努力スコアを計算
+     * @param {Object} drawing 描画データ
+     * @param {Object} template テンプレートデータ
+     * @returns {number} 努力スコア
+     */
+    calculateEffortScore(drawing, template) {
+        let effortScore = 0;
+
+        // 描画の試行があることを評価
+        if (drawing.strokeCount > 0) {
+            effortScore += 0.3;
+        }
+
+        // 適切な量の描画があることを評価
+        if (drawing.totalPoints >= 10) {
+            effortScore += 0.2;
+        }
+
+        // 描画時間が適切であることを評価
+        const drawingSpeed = this.calculateDrawingSpeed(drawing.normalizedStrokes);
+        if (drawingSpeed > 0.1 && drawingSpeed < 0.9) {
+            effortScore += 0.2;
+        }
+
+        // 描画の滑らかさを評価
+        const smoothness = this.calculateSmoothness(drawing.normalizedStrokes);
+        if (smoothness > 0.3) {
+            effortScore += 0.3;
+        }
+
+        return Math.min(1.0, effortScore);
+    }
+
     calculateStrokeSimilarity(actualStrokes, expectedStrokes) {
         if (expectedStrokes === 0) return actualStrokes === 0 ? 1 : 0;
         
@@ -475,6 +724,194 @@ export class RecognitionService {
         return Math.max(0, Math.min(1, confidence));
     }
 
+    /**
+     * 子供向けの励まし重視の信頼度計算
+     * @param {number} similarity 類似度
+     * @param {Object} drawing 描画データ
+     * @param {Object} template テンプレートデータ
+     * @returns {number} 励まし重視の信頼度
+     */
+    calculateEncouragingConfidence(similarity, drawing, template) {
+        // ベース信頼度を寛容に設定
+        let confidence = similarity;
+
+        // 描画の試行があることを評価（最低保証）
+        if (drawing.strokeCount > 0) {
+            confidence = Math.max(confidence, 0.25); // 描画があれば最低25%
+        }
+
+        // 子供の描画特性を考慮した調整
+        const childFriendlyBonus = this.calculateChildFriendlyBonus(drawing, template);
+        confidence += childFriendlyBonus;
+
+        // 努力を評価（ストローク数が多い場合）
+        if (drawing.strokeCount >= template.strokeCount * 0.5) {
+            confidence += 0.1; // 努力ボーナス
+        }
+
+        // 形状の基本的な特徴が一致している場合
+        if (this.hasBasicShapeMatch(drawing.features, template.features)) {
+            confidence += 0.15; // 形状マッチボーナス
+        }
+
+        // 描画サイズが適切な場合
+        if (drawing.boundingBox && this.isReasonableSize(drawing.boundingBox)) {
+            confidence += 0.05; // サイズボーナス
+        }
+
+        // 最終的な信頼度を0.2-1.0の範囲に調整（0.2未満は完全失敗のみ）
+        if (drawing.strokeCount > 0 && drawing.totalPoints > 5) {
+            confidence = Math.max(confidence, 0.2);
+        }
+
+        return Math.max(0, Math.min(1, confidence));
+    }
+
+    /**
+     * 子供向けボーナス計算
+     * @param {Object} drawing 描画データ
+     * @param {Object} template テンプレートデータ
+     * @returns {number} ボーナス値
+     */
+    calculateChildFriendlyBonus(drawing, template) {
+        let bonus = 0;
+
+        // 複雑度が近い場合のボーナス
+        const complexityDiff = Math.abs(drawing.complexity - template.features.complexity);
+        if (complexityDiff < 0.3) {
+            bonus += 0.1;
+        }
+
+        // 描画の滑らかさボーナス（震えが少ない）
+        const smoothness = this.calculateSmoothness(drawing.normalizedStrokes);
+        if (smoothness > 0.6) {
+            bonus += 0.05;
+        }
+
+        // 描画時間が適切な場合（急ぎすぎず、遅すぎず）
+        const drawingSpeed = this.calculateDrawingSpeed(drawing.normalizedStrokes);
+        if (drawingSpeed > 0.3 && drawingSpeed < 0.8) {
+            bonus += 0.05;
+        }
+
+        return bonus;
+    }
+
+    /**
+     * 基本的な形状マッチをチェック
+     * @param {Object} actualFeatures 実際の特徴
+     * @param {Object} expectedFeatures 期待される特徴
+     * @returns {boolean} 基本マッチするか
+     */
+    hasBasicShapeMatch(actualFeatures, expectedFeatures) {
+        let matches = 0;
+        let total = 0;
+
+        // 主要な特徴をチェック
+        ['hasHorizontalLine', 'hasVerticalLine', 'hasCurve'].forEach(feature => {
+            total++;
+            if (actualFeatures[feature] === expectedFeatures[feature]) {
+                matches++;
+            }
+        });
+
+        // 50%以上の特徴が一致すれば基本マッチとみなす
+        return (matches / total) >= 0.5;
+    }
+
+    /**
+     * 描画サイズが適切かチェック
+     * @param {Object} boundingBox 境界ボックス
+     * @returns {boolean} 適切なサイズか
+     */
+    isReasonableSize(boundingBox) {
+        const area = boundingBox.width * boundingBox.height;
+        // 適切なサイズ範囲（小さすぎず、大きすぎず）
+        return area >= 500 && area <= 100000;
+    }
+
+    /**
+     * 描画の滑らかさを計算
+     * @param {Array} normalizedStrokes 正規化されたストローク
+     * @returns {number} 滑らかさ（0-1）
+     */
+    calculateSmoothness(normalizedStrokes) {
+        if (!normalizedStrokes || normalizedStrokes.length === 0) return 0;
+
+        let totalSmoothness = 0;
+        let strokeCount = 0;
+
+        normalizedStrokes.forEach(stroke => {
+            if (stroke.length < 3) return;
+
+            let smoothness = 0;
+            let segments = 0;
+
+            for (let i = 2; i < stroke.length; i++) {
+                const p1 = stroke[i - 2];
+                const p2 = stroke[i - 1];
+                const p3 = stroke[i];
+
+                // 角度変化を計算
+                const angle1 = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+                const angle2 = Math.atan2(p3.y - p2.y, p3.x - p2.x);
+                let angleDiff = Math.abs(angle1 - angle2);
+                
+                // 角度差を0-πの範囲に正規化
+                if (angleDiff > Math.PI) angleDiff = 2 * Math.PI - angleDiff;
+
+                // 滑らかさスコア（角度変化が小さいほど高い）
+                smoothness += 1 - (angleDiff / Math.PI);
+                segments++;
+            }
+
+            if (segments > 0) {
+                totalSmoothness += smoothness / segments;
+                strokeCount++;
+            }
+        });
+
+        return strokeCount > 0 ? totalSmoothness / strokeCount : 0;
+    }
+
+    /**
+     * 描画速度を計算
+     * @param {Array} normalizedStrokes 正規化されたストローク
+     * @returns {number} 描画速度（0-1）
+     */
+    calculateDrawingSpeed(normalizedStrokes) {
+        if (!normalizedStrokes || normalizedStrokes.length === 0) return 0;
+
+        let totalDistance = 0;
+        let totalTime = 0;
+
+        normalizedStrokes.forEach(stroke => {
+            if (stroke.length < 2) return;
+
+            for (let i = 1; i < stroke.length; i++) {
+                const prev = stroke[i - 1];
+                const curr = stroke[i];
+
+                // 距離を計算
+                const distance = Math.sqrt(
+                    Math.pow(curr.x - prev.x, 2) + Math.pow(curr.y - prev.y, 2)
+                );
+                totalDistance += distance;
+
+                // 時間差を計算
+                if (curr.timestamp && prev.timestamp) {
+                    totalTime += curr.timestamp - prev.timestamp;
+                }
+            }
+        });
+
+        if (totalTime === 0) return 0.5; // デフォルト値
+
+        // 速度を正規化（適切な範囲に調整）
+        const speed = totalDistance / totalTime;
+        return Math.max(0, Math.min(1, speed / 0.01)); // 0.01を基準速度とする
+    }
+
     preprocessDrawing(drawingData) {
         if (!drawingData || !drawingData.strokes) return null;
 
@@ -482,8 +919,11 @@ export class RecognitionService {
         const strokeCount = drawingData.strokes.length;
         const totalPoints = drawingData.strokes.reduce((total, stroke) => total + stroke.length, 0);
 
+        // 子供向け正規化処理を適用
+        const childNormalizedStrokes = this.normalizeChildDrawing(drawingData.strokes, drawingData.boundingBox);
+
         // 正規化された座標の計算
-        const normalizedStrokes = this.normalizeStrokes(drawingData.strokes, drawingData.boundingBox);
+        const normalizedStrokes = this.normalizeStrokes(childNormalizedStrokes, drawingData.boundingBox);
 
         // 形状特徴の抽出
         const features = this.extractFeatures(normalizedStrokes);
@@ -499,6 +939,200 @@ export class RecognitionService {
             features: features,
             complexity: complexity
         };
+    }
+
+    /**
+     * 子供の描画特性を考慮した正規化処理
+     * @param {Array} strokes 元のストローク配列
+     * @param {Object} boundingBox 境界ボックス
+     * @returns {Array} 正規化されたストローク配列
+     */
+    normalizeChildDrawing(strokes, boundingBox) {
+        if (!strokes || strokes.length === 0) return strokes;
+
+        let normalizedStrokes = strokes.map(stroke => [...stroke]); // ディープコピー
+
+        // 1. 震え・揺れの正規化
+        normalizedStrokes = this.smoothenTremor(normalizedStrokes);
+
+        // 2. 不完全な線の補完
+        normalizedStrokes = this.completeIncompleteLines(normalizedStrokes);
+
+        // 3. 位置偏差の許容（±50%）
+        normalizedStrokes = this.adjustPositionTolerance(normalizedStrokes, boundingBox);
+
+        // 4. サイズ変動の正規化（±40%）
+        normalizedStrokes = this.normalizeSize(normalizedStrokes, boundingBox);
+
+        return normalizedStrokes;
+    }
+
+    /**
+     * 震え・揺れを滑らかにする
+     * @param {Array} strokes ストローク配列
+     * @returns {Array} 滑らかにされたストローク配列
+     */
+    smoothenTremor(strokes) {
+        return strokes.map(stroke => {
+            if (stroke.length < 3) return stroke;
+
+            const smoothedStroke = [stroke[0]]; // 最初の点は保持
+
+            for (let i = 1; i < stroke.length - 1; i++) {
+                const prev = stroke[i - 1];
+                const curr = stroke[i];
+                const next = stroke[i + 1];
+
+                // 移動平均を使用して震えを軽減
+                const smoothedPoint = {
+                    x: (prev.x + curr.x + next.x) / 3,
+                    y: (prev.y + curr.y + next.y) / 3,
+                    timestamp: curr.timestamp
+                };
+
+                // 急激な変化を検出して補正
+                const distToPrev = Math.sqrt(
+                    Math.pow(smoothedPoint.x - prev.x, 2) + 
+                    Math.pow(smoothedPoint.y - prev.y, 2)
+                );
+
+                // 距離が小さすぎる場合（震え）は前の点に近づける
+                if (distToPrev < 2) {
+                    smoothedPoint.x = (prev.x + smoothedPoint.x) / 2;
+                    smoothedPoint.y = (prev.y + smoothedPoint.y) / 2;
+                }
+
+                smoothedStroke.push(smoothedPoint);
+            }
+
+            smoothedStroke.push(stroke[stroke.length - 1]); // 最後の点は保持
+            return smoothedStroke;
+        });
+    }
+
+    /**
+     * 不完全な線を補完する
+     * @param {Array} strokes ストローク配列
+     * @returns {Array} 補完されたストローク配列
+     */
+    completeIncompleteLines(strokes) {
+        return strokes.map(stroke => {
+            if (stroke.length < 2) return stroke;
+
+            const completedStroke = [...stroke];
+            
+            // ストロークの端点間の距離をチェック
+            for (let i = 1; i < stroke.length; i++) {
+                const prev = stroke[i - 1];
+                const curr = stroke[i];
+                
+                const distance = Math.sqrt(
+                    Math.pow(curr.x - prev.x, 2) + 
+                    Math.pow(curr.y - prev.y, 2)
+                );
+
+                // 大きなギャップがある場合は補間点を追加
+                if (distance > 20) {
+                    const steps = Math.ceil(distance / 10);
+                    const stepX = (curr.x - prev.x) / steps;
+                    const stepY = (curr.y - prev.y) / steps;
+                    const stepTime = curr.timestamp && prev.timestamp ? 
+                        (curr.timestamp - prev.timestamp) / steps : 0;
+
+                    // 補間点を挿入
+                    for (let j = 1; j < steps; j++) {
+                        const interpolatedPoint = {
+                            x: prev.x + stepX * j,
+                            y: prev.y + stepY * j,
+                            timestamp: prev.timestamp ? prev.timestamp + stepTime * j : undefined
+                        };
+                        completedStroke.splice(i + j - 1, 0, interpolatedPoint);
+                    }
+                }
+            }
+
+            return completedStroke;
+        });
+    }
+
+    /**
+     * 位置偏差の許容度を調整（±50%）
+     * @param {Array} strokes ストローク配列
+     * @param {Object} boundingBox 境界ボックス
+     * @returns {Array} 調整されたストローク配列
+     */
+    adjustPositionTolerance(strokes, boundingBox) {
+        if (!boundingBox) return strokes;
+
+        const centerX = boundingBox.x + boundingBox.width / 2;
+        const centerY = boundingBox.y + boundingBox.height / 2;
+        const toleranceX = boundingBox.width * 0.5; // ±50%
+        const toleranceY = boundingBox.height * 0.5; // ±50%
+
+        return strokes.map(stroke => {
+            return stroke.map(point => {
+                // 中心からの偏差を計算
+                const deviationX = point.x - centerX;
+                const deviationY = point.y - centerY;
+
+                // 許容範囲内に調整
+                const adjustedX = centerX + Math.max(-toleranceX, Math.min(toleranceX, deviationX));
+                const adjustedY = centerY + Math.max(-toleranceY, Math.min(toleranceY, deviationY));
+
+                return {
+                    x: adjustedX,
+                    y: adjustedY,
+                    timestamp: point.timestamp
+                };
+            });
+        });
+    }
+
+    /**
+     * サイズ変動を正規化（±40%）
+     * @param {Array} strokes ストローク配列
+     * @param {Object} boundingBox 境界ボックス
+     * @returns {Array} サイズ正規化されたストローク配列
+     */
+    normalizeSize(strokes, boundingBox) {
+        if (!boundingBox || boundingBox.width === 0 || boundingBox.height === 0) {
+            return strokes;
+        }
+
+        // 標準サイズを定義（適切な文字サイズ）
+        const standardSize = 100;
+        const currentSize = Math.max(boundingBox.width, boundingBox.height);
+        
+        // サイズ変動の許容範囲（±40%）
+        const minSize = standardSize * 0.6;
+        const maxSize = standardSize * 1.4;
+        
+        // 現在のサイズが許容範囲外の場合は調整
+        let scaleFactor = 1;
+        if (currentSize < minSize) {
+            scaleFactor = minSize / currentSize;
+        } else if (currentSize > maxSize) {
+            scaleFactor = maxSize / currentSize;
+        }
+
+        if (scaleFactor === 1) return strokes;
+
+        // スケール調整を適用
+        const centerX = boundingBox.x + boundingBox.width / 2;
+        const centerY = boundingBox.y + boundingBox.height / 2;
+
+        return strokes.map(stroke => {
+            return stroke.map(point => {
+                const relativeX = (point.x - centerX) * scaleFactor;
+                const relativeY = (point.y - centerY) * scaleFactor;
+
+                return {
+                    x: centerX + relativeX,
+                    y: centerY + relativeY,
+                    timestamp: point.timestamp
+                };
+            });
+        });
     }
 
     normalizeStrokes(strokes, boundingBox) {
@@ -848,5 +1482,131 @@ export class RecognitionService {
         this.preloadBasicTemplates();
         
         console.log('テンプレートキャッシュをクリアしました');
+    }
+
+    /**
+     * 信頼度に基づく励ましレベルを取得
+     * @param {number} confidence 信頼度
+     * @returns {string} 励ましレベル
+     */
+    getEncouragementLevel(confidence) {
+        if (confidence >= 0.5) {
+            return 'excellent'; // すごい！とてもじょうず！
+        } else if (confidence >= 0.2) {
+            return 'fair'; // いいかんじ！もうすこし！
+        } else {
+            return 'poor'; // だいじょうぶ！れんしゅうしよう！
+        }
+    }
+
+    /**
+     * 励ましを重視したフォールバック結果を作成
+     * @param {string} targetCharacter ターゲット文字
+     * @param {Object} preprocessed 前処理済みデータ
+     * @returns {Object} フォールバック結果
+     */
+    createEncouragingFallback(targetCharacter, preprocessed) {
+        // 描画の試行があれば最低でもfairレベル
+        const baseConfidence = preprocessed.strokeCount > 0 ? 0.3 : 0.1;
+        
+        return {
+            character: targetCharacter,
+            confidence: baseConfidence,
+            recognized: baseConfidence >= 0.2,
+            details: {
+                message: 'テンプレートが見つかりません（励まし重視認識）',
+                fallback: true,
+                strokeCount: preprocessed.strokeCount,
+                expectedStrokes: 'unknown',
+                childFriendlyScore: baseConfidence,
+                encouragementLevel: this.getEncouragementLevel(baseConfidence),
+                normalizedForChild: true
+            }
+        };
+    }
+
+    /**
+     * 子供向け認識エラーハンドリング
+     * @param {Error} error エラーオブジェクト
+     * @param {string} targetCharacter ターゲット文字
+     * @returns {Object} エラー時の励まし結果
+     */
+    handleChildRecognitionError(error, targetCharacter) {
+        console.error('子供向けRecognitionService エラー処理:', error);
+        
+        // エラーが発生しても励ましを提供
+        const encouragingResult = {
+            character: targetCharacter,
+            confidence: 0.25, // エラー時でも最低限の信頼度
+            recognized: true,  // 励まし重視で認識成功とする
+            details: {
+                error: error.message,
+                fallback: true,
+                similarity: 0.25,
+                strokeCount: 0,
+                expectedStrokes: 'unknown',
+                childFriendlyScore: 0.25,
+                encouragementLevel: 'fair', // エラー時でもfairレベル
+                normalizedForChild: true,
+                message: 'エラーが発生しましたが、がんばりました！'
+            }
+        };
+        
+        // エラーイベントを発火
+        if (this.onError) {
+            this.onError({
+                type: 'child-recognition',
+                message: error.message,
+                service: 'RecognitionService',
+                targetCharacter: targetCharacter,
+                handledGracefully: true
+            });
+        }
+        
+        return encouragingResult;
+    }
+
+    /**
+     * 角度偏差の許容度を拡大（±30°）
+     * @param {number} actualAngle 実際の角度
+     * @param {number} expectedAngle 期待される角度
+     * @returns {boolean} 許容範囲内かどうか
+     */
+    isAngleWithinTolerance(actualAngle, expectedAngle) {
+        const tolerance = Math.PI / 6; // 30度をラジアンに変換
+        let angleDiff = Math.abs(actualAngle - expectedAngle);
+        
+        // 角度差を0-πの範囲に正規化
+        if (angleDiff > Math.PI) {
+            angleDiff = 2 * Math.PI - angleDiff;
+        }
+        
+        return angleDiff <= tolerance;
+    }
+
+    /**
+     * 認識システムの設定を取得
+     * @returns {Object} 現在の設定
+     */
+    getRecognitionSettings() {
+        return {
+            lenientMode: true,
+            confidenceThresholds: {
+                excellent: 0.5,
+                fair: 0.2,
+                poor: 0.0
+            },
+            tolerances: {
+                position: 0.5,  // ±50%
+                angle: 30,      // ±30°
+                size: 0.4       // ±40%
+            },
+            childFriendlyFeatures: {
+                tremorSmoothing: true,
+                lineCompletion: true,
+                effortEvaluation: true,
+                encouragingFeedback: true
+            }
+        };
     }
 }

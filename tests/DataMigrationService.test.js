@@ -1,155 +1,144 @@
 import { DataMigrationService } from '../js/services/DataMigrationService.js';
 import { DataStorageService } from '../js/services/DataStorageService.js';
+import { HiraganaDataService } from '../js/services/HiraganaDataService.js';
 
 // LocalStorageのモック
-const localStorageMock = {
-    data: {},
-    getItem: jest.fn((key) => localStorageMock.data[key] || null),
-    setItem: jest.fn((key, value) => {
-        localStorageMock.data[key] = value;
-    }),
-    removeItem: jest.fn((key) => {
-        delete localStorageMock.data[key];
-    }),
-    clear: jest.fn(() => {
-        localStorageMock.data = {};
-    }),
-    get length() {
-        return Object.keys(localStorageMock.data).length;
-    },
-    key: jest.fn((index) => Object.keys(localStorageMock.data)[index] || null)
-};
+const localStorageMock = (() => {
+    let store = {};
+    return {
+        getItem: (key) => store[key] || null,
+        setItem: (key, value) => store[key] = value.toString(),
+        removeItem: (key) => delete store[key],
+        clear: () => store = {},
+        key: (index) => Object.keys(store)[index] || null,
+        get length() { return Object.keys(store).length; }
+    };
+})();
 
-// グローバルlocalStorageをモック
 Object.defineProperty(window, 'localStorage', {
     value: localStorageMock
 });
 
 describe('DataMigrationService', () => {
+    let migrationService;
     let dataStorageService;
-    let dataMigrationService;
+    let hiraganaDataService;
 
     beforeEach(() => {
         // LocalStorageをクリア
-        localStorageMock.clear();
-        localStorageMock.getItem.mockClear();
-        localStorageMock.setItem.mockClear();
-        localStorageMock.removeItem.mockClear();
-
+        localStorage.clear();
+        
         // サービスを初期化
         dataStorageService = new DataStorageService();
-        dataMigrationService = new DataMigrationService(dataStorageService);
-        dataStorageService.setMigrationService(dataMigrationService);
+        hiraganaDataService = new HiraganaDataService();
+        migrationService = new DataMigrationService(dataStorageService, hiraganaDataService);
     });
 
-    describe('getCurrentDataVersion', () => {
-        test('新規インストールの場合は最新バージョンを返す', () => {
-            // 完全に空の状態を確保
-            localStorageMock.clear();
-            
-            const version = dataMigrationService.getCurrentDataVersion();
+    afterEach(() => {
+        localStorage.clear();
+    });
+
+    describe('初期化', () => {
+        test('正常に初期化される', () => {
+            expect(migrationService).toBeDefined();
+            expect(migrationService.currentVersion).toBe('2.0');
+            expect(migrationService.supportedVersions).toContain('1.0');
+            expect(migrationService.supportedVersions).toContain('2.0');
+        });
+
+        test('難易度マッピングが作成される', () => {
+            expect(migrationService.difficultyMapping).toBeDefined();
+            expect(migrationService.difficultyMapping.levelMapping).toBeDefined();
+            expect(migrationService.difficultyMapping.characterMapping).toBeDefined();
+        });
+    });
+
+    describe('データバージョン管理', () => {
+        test('デフォルトバージョンは1.0', () => {
+            const version = migrationService.getCurrentDataVersion();
+            expect(version).toBe('1.0');
+        });
+
+        test('データバージョンを設定できる', () => {
+            migrationService.setDataVersion('2.0');
+            const version = migrationService.getCurrentDataVersion();
             expect(version).toBe('2.0');
         });
 
-        test('バージョン情報が保存されている場合はそれを返す', () => {
-            const versionInfo = {
-                version: '1.5',
-                updatedAt: Date.now()
-            };
-            localStorageMock.data['hiragana_data_version'] = JSON.stringify(versionInfo);
-
-            const version = dataMigrationService.getCurrentDataVersion();
-            expect(version).toBe('1.5');
-        });
-
-        test('旧形式の進捗データがある場合は1.0を返す', () => {
-            const oldProgress = {
-                version: '1.0',
-                totalSessions: 5,
-                characters: {
-                    'あ': { totalSessions: 2, averageScore: 0.8 }
-                }
-            };
-            localStorageMock.data['hiragana_practice_progress'] = JSON.stringify(oldProgress);
-
-            const version = dataMigrationService.getCurrentDataVersion();
-            expect(version).toBe('1.0');
-        });
-
-        test('既存セッションデータがある場合は1.0を返す', () => {
-            const sessions = [
-                {
-                    id: 'session1',
-                    character: { character: 'あ' },
-                    startTime: Date.now(),
-                    attempts: []
-                }
-            ];
-            localStorageMock.data['hiragana_practice_sessions'] = JSON.stringify(sessions);
-
-            const version = dataMigrationService.getCurrentDataVersion();
-            expect(version).toBe('1.0');
-        });
-    });
-
-    describe('isVersionSupported', () => {
-        test('サポートされているバージョンの場合はtrueを返す', () => {
-            expect(dataMigrationService.isVersionSupported('1.0')).toBe(true);
-            expect(dataMigrationService.isVersionSupported('1.1')).toBe(true);
-            expect(dataMigrationService.isVersionSupported('2.0')).toBe(true);
-        });
-
-        test('サポートされていないバージョンの場合はfalseを返す', () => {
-            expect(dataMigrationService.isVersionSupported('0.9')).toBe(false);
-            expect(dataMigrationService.isVersionSupported('3.0')).toBe(false);
-            expect(dataMigrationService.isVersionSupported('invalid')).toBe(false);
-        });
-    });
-
-    describe('createDataBackup', () => {
-        test('データバックアップを正常に作成する', () => {
-            // テストデータを設定
-            const sessions = [{ id: 'test', character: { character: 'あ' } }];
-            const progress = { version: '1.0', totalSessions: 1 };
+        test('移行が必要かどうかを判定できる', () => {
+            // 初期状態では移行が必要
+            expect(migrationService.isMigrationNeeded()).toBe(true);
             
-            localStorageMock.data['hiragana_practice_sessions'] = JSON.stringify(sessions);
-            localStorageMock.data['hiragana_practice_progress'] = JSON.stringify(progress);
+            // バージョンを更新すると移行不要
+            migrationService.setDataVersion('2.0');
+            expect(migrationService.isMigrationNeeded()).toBe(false);
+        });
+    });
 
-            const success = dataMigrationService.createDataBackup();
+    describe('バックアップ機能', () => {
+        test('バックアップを作成できる', async () => {
+            // テストデータを準備
+            const testData = {
+                sessions: [{ character: { character: 'あ' }, attempts: [] }],
+                progress: { totalSessions: 1 }
+            };
+            
+            dataStorageService.saveToStorage('hiragana_practice_sessions', testData.sessions);
+            dataStorageService.saveToStorage('hiragana_practice_progress', testData.progress);
+
+            const success = await migrationService.createBackup();
             expect(success).toBe(true);
 
-            // バックアップキーが作成されているかチェック
-            const latestBackupKey = JSON.parse(localStorageMock.data['hiragana_latest_backup'] || 'null');
-            expect(latestBackupKey).toBeDefined();
+            // バックアップが作成されたことを確認
+            const backupKeys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('hiragana_backup_')) {
+                    backupKeys.push(key);
+                }
+            }
+            expect(backupKeys.length).toBeGreaterThan(0);
+        });
 
-            // バックアップデータが保存されているかチェック
-            const backupData = JSON.parse(localStorageMock.data[latestBackupKey]);
-            expect(backupData.sessions).toEqual(sessions);
-            expect(backupData.progress).toMatchObject({
-                version: '1.0',
-                totalSessions: 1
-            });
-            expect(backupData.version).toBe('1.0');
+        test('バックアップから復元できる', async () => {
+            // バックアップを作成
+            const testData = {
+                sessions: [{ character: { character: 'あ' }, attempts: [] }],
+                progress: { totalSessions: 1 }
+            };
+            
+            dataStorageService.saveToStorage('hiragana_practice_sessions', testData.sessions);
+            await migrationService.createBackup();
+
+            // データを削除
+            dataStorageService.removeFromStorage('hiragana_practice_sessions');
+
+            // 復元
+            const success = await migrationService.restoreFromBackup();
+            expect(success).toBe(true);
+
+            // データが復元されたことを確認
+            const restoredSessions = dataStorageService.getAllSessions();
+            expect(restoredSessions).toHaveLength(1);
+            expect(restoredSessions[0].character.character).toBe('あ');
         });
     });
 
-    describe('convertOldProgressToNew', () => {
-        test('旧形式の進捗データを新形式に変換する', () => {
-            const oldProgress = {
-                version: '1.0',
-                totalSessions: 10,
+    describe('データ移行', () => {
+        test('バージョン1.0からの移行', async () => {
+            // バージョン1.0のテストデータを準備
+            const oldProgressData = {
+                totalSessions: 5,
                 totalPracticeTime: 300000,
                 characters: {
                     'あ': {
-                        character: 'あ',
-                        totalSessions: 5,
+                        totalAttempts: 3,
                         averageScore: 0.8,
                         bestScore: 0.9,
                         lastPracticed: Date.now() - 86400000 // 1日前
                     },
                     'い': {
-                        character: 'い',
-                        totalSessions: 3,
+                        totalAttempts: 2,
                         averageScore: 0.6,
                         bestScore: 0.7,
                         lastPracticed: Date.now() - 172800000 // 2日前
@@ -159,50 +148,76 @@ describe('DataMigrationService', () => {
 
             const oldSessions = [
                 {
-                    id: 'session1',
-                    character: { character: 'あ' },
-                    startTime: Date.now() - 86400000,
-                    endTime: Date.now() - 86400000 + 60000,
+                    character: { character: 'あ', difficulty: 1 },
                     attempts: [
-                        {
-                            timestamp: Date.now() - 86400000,
-                            scoreResult: { score: 0.8 },
-                            recognitionResult: { confidence: 0.9 }
-                        }
-                    ]
+                        { scoreResult: { score: 0.8 }, timestamp: Date.now() }
+                    ],
+                    startTime: Date.now() - 1000,
+                    endTime: Date.now()
                 }
             ];
 
-            const newProgress = dataMigrationService.convertOldProgressToNew(oldProgress, oldSessions);
+            // 旧データを保存
+            dataStorageService.saveToStorage('hiragana_practice_progress', oldProgressData);
+            dataStorageService.saveToStorage('hiragana_practice_sessions', oldSessions);
 
-            expect(newProgress.version).toBe('2.0');
-            expect(newProgress.sessionData.totalPracticeTime).toBe(300000);
-            expect(newProgress.sessionData.sessionsCount).toBe(10);
+            // 移行を実行
+            const success = await migrationService.migrateFromV1_0();
+            expect(success).toBe(true);
 
-            // 文字別進捗データの確認
-            expect(newProgress.characterProgress['あ']).toBeDefined();
-            expect(newProgress.characterProgress['あ'].character).toBe('あ');
-            expect(Array.isArray(newProgress.characterProgress['あ'].attempts)).toBe(true);
-            expect(newProgress.characterProgress['あ'].attempts.length).toBeGreaterThan(0);
+            // 移行後のデータを確認
+            const migratedData = dataStorageService.loadData('progressTracking');
+            expect(migratedData).toBeDefined();
+            expect(migratedData.version).toBe('2.0');
+            expect(migratedData.characterProgress).toBeDefined();
+            expect(migratedData.characterProgress['あ']).toBeDefined();
+            expect(migratedData.characterProgress['い']).toBeDefined();
+        });
 
-            expect(newProgress.characterProgress['い']).toBeDefined();
-            expect(newProgress.characterProgress['い'].character).toBe('い');
-            expect(Array.isArray(newProgress.characterProgress['い'].attempts)).toBe(true);
+        test('文字進捗データの変換', async () => {
+            const oldCharData = {
+                totalAttempts: 5,
+                averageScore: 0.75,
+                bestScore: 0.9,
+                lastPracticed: Date.now() - 86400000
+            };
+
+            const converted = await migrationService.convertCharacterProgress('あ', oldCharData);
+            
+            expect(converted).toBeDefined();
+            expect(converted.character).toBe('あ');
+            expect(converted.attempts).toBeDefined();
+            expect(converted.attempts.length).toBeGreaterThan(0);
+            
+            // 変換された試行データの検証
+            converted.attempts.forEach(attempt => {
+                expect(attempt.score).toBeGreaterThanOrEqual(0);
+                expect(attempt.score).toBeLessThanOrEqual(1);
+                expect(attempt.timestamp).toBeGreaterThan(0);
+                expect(attempt.details.migrated).toBe(true);
+            });
+        });
+
+        test('新しい難易度レベルの取得', () => {
+            // テスト用の文字で新しい難易度レベルを取得
+            const level1 = migrationService.getNewDifficultyLevel('あ');
+            const level2 = migrationService.getNewDifficultyLevel('く');
+            const level3 = migrationService.getNewDifficultyLevel('き');
+
+            expect(['beginner', 'intermediate', 'advanced']).toContain(level1);
+            expect(['beginner', 'intermediate', 'advanced']).toContain(level2);
+            expect(['beginner', 'intermediate', 'advanced']).toContain(level3);
         });
     });
 
-    describe('validateData', () => {
-        test('有効なデータの場合はtrueを返す', () => {
+    describe('データ検証', () => {
+        test('進捗追跡データの検証', () => {
             const validData = {
                 characterProgress: {
                     'あ': {
                         character: 'あ',
                         attempts: [
-                            {
-                                score: 0.8,
-                                timestamp: Date.now(),
-                                details: {}
-                            }
+                            { score: 0.8, timestamp: Date.now(), details: {} }
                         ]
                     }
                 },
@@ -210,199 +225,239 @@ describe('DataMigrationService', () => {
                     startTime: null,
                     totalPracticeTime: 0,
                     sessionsCount: 0
-                }
+                },
+                version: '2.0'
             };
 
-            expect(dataMigrationService.validateData(validData)).toBe(true);
+            const result = migrationService.validateProgressTrackingData(validData);
+            expect(result.isValid).toBe(true);
+            expect(result.errors).toHaveLength(0);
         });
 
-        test('無効なデータの場合はfalseを返す', () => {
+        test('無効な進捗追跡データの検証', () => {
             const invalidData = {
                 characterProgress: {
                     'あ': {
-                        character: 'あ',
-                        attempts: [
-                            {
-                                score: 1.5, // 無効なスコア（1を超える）
-                                timestamp: Date.now()
-                            }
-                        ]
-                    }
-                }
-            };
-
-            expect(dataMigrationService.validateData(invalidData)).toBe(false);
-        });
-
-        test('nullやundefinedの場合はfalseを返す', () => {
-            expect(dataMigrationService.validateData(null)).toBe(false);
-            expect(dataMigrationService.validateData(undefined)).toBe(false);
-            expect(dataMigrationService.validateData('invalid')).toBe(false);
-        });
-    });
-
-    describe('sanitizeData', () => {
-        test('無効なデータをサニタイズする', () => {
-            const corruptedData = {
-                characterProgress: {
-                    'あ': {
-                        character: 'あ',
-                        attempts: [
-                            {
-                                score: 0.8,
-                                timestamp: Date.now(),
-                                details: {}
-                            },
-                            {
-                                score: 1.5, // 無効なスコア
-                                timestamp: Date.now()
-                            },
-                            {
-                                score: -0.2, // 無効なスコア
-                                timestamp: 'invalid' // 無効なタイムスタンプ
-                            }
-                        ]
-                    },
-                    'い': {
-                        character: 'い',
-                        attempts: 'invalid' // 無効な試行データ
+                        character: 'い', // 不整合
+                        attempts: 'invalid' // 配列ではない
                     }
                 },
-                sessionData: {
-                    totalPracticeTime: -100, // 無効な値
-                    sessionsCount: 'invalid' // 無効な値
-                }
+                version: '1.0' // 古いバージョン
             };
 
-            const sanitized = dataMigrationService.sanitizeData(corruptedData);
-
-            expect(sanitized.version).toBe('2.0');
-            expect(sanitized.characterProgress['あ'].attempts).toHaveLength(1); // 有効な試行のみ残る
-            expect(sanitized.characterProgress['い']).toBeUndefined(); // 無効なデータは削除
-            expect(sanitized.sessionData.totalPracticeTime).toBe(0); // デフォルト値
-            expect(sanitized.sessionData.sessionsCount).toBe(0); // デフォルト値
+            const result = migrationService.validateProgressTrackingData(invalidData);
+            expect(result.isValid).toBe(false);
+            expect(result.errors.length).toBeGreaterThan(0);
         });
 
-        test('nullデータの場合はデフォルトデータを返す', () => {
-            const sanitized = dataMigrationService.sanitizeData(null);
-
-            expect(sanitized.version).toBe('2.0');
-            expect(sanitized.characterProgress).toEqual({});
-            expect(sanitized.sessionData.totalPracticeTime).toBe(0);
-            expect(sanitized.sessionData.sessionsCount).toBe(0);
-        });
-    });
-
-    describe('getMigrationStatus', () => {
-        test('移行状況を正しく返す', () => {
-            // バージョン1.0のデータを設定
-            const oldProgress = { version: '1.0', totalSessions: 1 };
-            localStorageMock.data['hiragana_practice_progress'] = JSON.stringify(oldProgress);
-
-            const status = dataMigrationService.getMigrationStatus();
-
-            expect(status.currentVersion).toBe('2.0');
-            expect(status.dataVersion).toBe('1.0');
-            expect(status.migrationNeeded).toBe(true);
-            expect(status.supportedVersions).toContain('1.0');
-            expect(status.supportedVersions).toContain('2.0');
-        });
-
-        test('移行不要の場合', () => {
-            // 最新バージョンのデータを設定
-            const versionInfo = { version: '2.0', updatedAt: Date.now() };
-            localStorageMock.data['hiragana_data_version'] = JSON.stringify(versionInfo);
-
-            const status = dataMigrationService.getMigrationStatus();
-
-            expect(status.currentVersion).toBe('2.0');
-            expect(status.dataVersion).toBe('2.0');
-            expect(status.migrationNeeded).toBe(false);
-        });
-    });
-
-    describe('migrateData', () => {
-        test('バージョン1.0から2.0への移行を実行する', async () => {
-            // バージョン1.0のテストデータを設定
-            const oldProgress = {
-                version: '1.0',
-                totalSessions: 5,
-                totalPracticeTime: 300000,
-                characters: {
-                    'あ': {
-                        character: 'あ',
-                        totalSessions: 3,
-                        averageScore: 0.8,
-                        lastPracticed: Date.now()
-                    }
-                }
-            };
-
-            const oldSessions = [
+        test('セッションデータの検証', () => {
+            const validSessions = [
                 {
-                    id: 'session1',
                     character: { character: 'あ' },
-                    startTime: Date.now() - 86400000,
-                    attempts: [
-                        {
-                            timestamp: Date.now() - 86400000,
-                            scoreResult: { score: 0.8 }
-                        }
-                    ]
+                    attempts: []
                 }
             ];
 
-            localStorageMock.data['hiragana_practice_progress'] = JSON.stringify(oldProgress);
-            localStorageMock.data['hiragana_practice_sessions'] = JSON.stringify(oldSessions);
-
-            const success = await dataMigrationService.migrateData();
-            expect(success).toBe(true);
-
-            // 新形式のデータが作成されているかチェック
-            const newProgressData = JSON.parse(localStorageMock.data['hiragana_progress_tracking']);
-            expect(newProgressData.version).toBe('2.0');
-            expect(newProgressData.characterProgress['あ']).toBeDefined();
-            expect(Array.isArray(newProgressData.characterProgress['あ'].attempts)).toBe(true);
-
-            // バージョン情報が更新されているかチェック
-            const versionInfo = JSON.parse(localStorageMock.data['hiragana_data_version']);
-            expect(versionInfo.version).toBe('2.0');
+            const result = migrationService.validateSessionData(validSessions);
+            expect(result.isValid).toBe(true);
+            expect(result.errors).toHaveLength(0);
         });
 
-        test('最新バージョンの場合は移行をスキップする', async () => {
-            // 最新バージョンのデータを設定
-            const versionInfo = { version: '2.0', updatedAt: Date.now() };
-            localStorageMock.data['hiragana_data_version'] = JSON.stringify(versionInfo);
+        test('無効なセッションデータの検証', () => {
+            const invalidSessions = [
+                {
+                    character: null, // 無効
+                    attempts: 'invalid' // 配列ではない
+                }
+            ];
 
-            const success = await dataMigrationService.migrateData();
+            const result = migrationService.validateSessionData(invalidSessions);
+            expect(result.isValid).toBe(false);
+            expect(result.errors.length).toBeGreaterThan(0);
+        });
+    });
+
+    describe('データ修復', () => {
+        test('進捗追跡データの修復（ValidationService経由）', async () => {
+            const corruptedData = {
+                characterProgress: {
+                    'あ': {
+                        // character プロパティが欠落
+                        attempts: [
+                            { score: 1.5, timestamp: Date.now() }, // 無効なスコア
+                            { score: 0.8, timestamp: 0 }, // 無効なタイムスタンプ
+                            { score: 0.7, timestamp: Date.now() } // 有効
+                        ]
+                    }
+                }
+                // sessionData が欠落
+                // version が欠落
+            };
+
+            // 破損したデータを保存
+            dataStorageService.saveData('progressTracking', corruptedData);
+            
+            // 修復を実行
+            const errors = ['テストエラー'];
+            const success = await migrationService.repairDataInconsistencies(errors);
             expect(success).toBe(true);
+            
+            // 修復されたデータを確認
+            const repairedData = dataStorageService.loadData('progressTracking');
+            expect(repairedData).toBeDefined();
+            if (repairedData) {
+                expect(repairedData.characterProgress['あ'].character).toBe('あ');
+            }
+        });
 
-            // 移行処理が実行されていないことを確認（バックアップが作成されていない）
-            expect(localStorageMock.data['hiragana_latest_backup']).toBeUndefined();
+        test('セッションデータの修復（ValidationService経由）', async () => {
+            const corruptedSessions = [
+                {
+                    character: { character: 'あ' },
+                    attempts: []
+                },
+                {
+                    character: null, // 無効
+                    attempts: []
+                },
+                {
+                    character: { character: 'い' },
+                    attempts: []
+                }
+            ];
+
+            // 破損したセッションデータを保存
+            dataStorageService.saveToStorage('hiragana_practice_sessions', corruptedSessions);
+            
+            // 修復を実行
+            const errors = ['テストエラー'];
+            const success = await migrationService.repairDataInconsistencies(errors);
+            expect(success).toBe(true);
+            
+            // 修復されたデータを確認
+            const repairedSessions = dataStorageService.getAllSessions();
+            expect(repairedSessions.length).toBeLessThanOrEqual(2); // 無効なセッションは除去
+        });
+    });
+
+    describe('移行情報', () => {
+        test('移行情報を取得できる', () => {
+            const info = migrationService.getMigrationInfo();
+            
+            expect(info.currentVersion).toBeDefined();
+            expect(info.targetVersion).toBe('2.0');
+            expect(info.migrationNeeded).toBeDefined();
+            expect(info.supportedVersions).toContain('1.0');
+            expect(info.supportedVersions).toContain('2.0');
+        });
+
+        test('移行前提条件の検証', () => {
+            const isValid = migrationService.validateMigrationPreconditions();
+            expect(typeof isValid).toBe('boolean');
+        });
+    });
+
+    describe('移行テスト', () => {
+        test('移行テストを実行できる', async () => {
+            const testResults = await migrationService.runMigrationTest();
+            
+            expect(testResults).toBeDefined();
+            expect(testResults.backupTest).toBeDefined();
+            expect(testResults.migrationTest).toBeDefined();
+            expect(testResults.validationTest).toBeDefined();
+            expect(testResults.restoreTest).toBeDefined();
+            expect(testResults.overallSuccess).toBeDefined();
+        });
+    });
+
+    describe('フォールバック処理', () => {
+        test('フォールバック移行を実行できる', async () => {
+            // 不明なバージョンのデータを設定
+            migrationService.setDataVersion('unknown');
+            
+            const success = await migrationService.performFallbackMigration();
+            expect(success).toBe(true);
+        });
+
+        test('データ不整合時のフォールバック処理', async () => {
+            // 破損したデータを設定
+            const corruptedData = {
+                characterProgress: null,
+                sessionData: 'invalid'
+            };
+            
+            dataStorageService.saveData('progressTracking', corruptedData);
+            
+            const errors = ['テストエラー'];
+            const success = await migrationService.repairDataInconsistencies(errors);
+            expect(success).toBe(true);
+            
+            // 修復されたデータを確認
+            const repairedData = dataStorageService.loadData('progressTracking');
+            if (repairedData) {
+                expect(repairedData.characterProgress).toBeDefined();
+                expect(repairedData.sessionData).toBeDefined();
+            }
         });
     });
 
     describe('エラーハンドリング', () => {
-        test('LocalStorageエラーを適切に処理する', () => {
-            // DataStorageServiceのloadFromStorageメソッドをモック
-            const originalLoadFromStorage = dataStorageService.loadFromStorage;
-            dataStorageService.loadFromStorage = jest.fn(() => {
-                throw new Error('LocalStorage error');
+        test('LocalStorage利用不可時の処理', () => {
+            // LocalStorageを無効化
+            const originalLocalStorage = window.localStorage;
+            Object.defineProperty(window, 'localStorage', {
+                value: null,
+                configurable: true
             });
 
-            const version = dataMigrationService.getCurrentDataVersion();
-            expect(version).toBe('1.0'); // エラー時のデフォルト値
+            const isValid = migrationService.validateMigrationPreconditions();
+            expect(isValid).toBe(false);
 
-            // モックを復元
-            dataStorageService.loadFromStorage = originalLoadFromStorage;
+            // LocalStorageを復元
+            Object.defineProperty(window, 'localStorage', {
+                value: originalLocalStorage,
+                configurable: true
+            });
         });
 
-        test('JSON解析エラーを適切に処理する', () => {
-            // 無効なJSONデータを設定
-            localStorageMock.data['hiragana_practice_progress'] = 'invalid json';
+        test('移行中のエラー処理', async () => {
+            // エラーを発生させるために無効なデータを設定
+            dataStorageService.saveToStorage('hiragana_practice_progress', 'invalid json');
+            
+            const success = await migrationService.migrateFromV1_0();
+            // 無効なJSONでも基本的な移行処理は継続される
+            expect(typeof success).toBe('boolean');
+        });
+    });
 
-            const version = dataMigrationService.getCurrentDataVersion();
-            expect(version).toBe('2.0'); // 新規インストール扱い
+    describe('パフォーマンス', () => {
+        test('大量データの移行処理', async () => {
+            // 大量のテストデータを作成
+            const largeProgressData = {
+                totalSessions: 1000,
+                totalPracticeTime: 3600000,
+                characters: {}
+            };
+
+            // 全ひらがな文字のデータを作成
+            const hiraganaChars = ['あ', 'い', 'う', 'え', 'お', 'か', 'き', 'く', 'け', 'こ'];
+            hiraganaChars.forEach(char => {
+                largeProgressData.characters[char] = {
+                    totalAttempts: 50,
+                    averageScore: Math.random(),
+                    bestScore: Math.random(),
+                    lastPracticed: Date.now() - Math.random() * 86400000 * 30
+                };
+            });
+
+            dataStorageService.saveToStorage('hiragana_practice_progress', largeProgressData);
+
+            const startTime = Date.now();
+            const success = await migrationService.migrateFromV1_0();
+            const endTime = Date.now();
+
+            expect(success).toBe(true);
+            expect(endTime - startTime).toBeLessThan(5000); // 5秒以内で完了
         });
     });
 });

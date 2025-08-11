@@ -1,33 +1,33 @@
 // 採点サービス
 export class ScoreService {
     constructor() {
-        // 3段階評価システムのメッセージ
+        // 励まし重視の3段階評価システムのメッセージ
         this.feedbackMessages = {
             excellent: {
-                primary: ['よくできました！', 'すばらしい！', 'とてもじょうず！', 'かんぺき！'],
-                secondary: ['この調子で続けましょう！', 'とても上手に書けています！', 'すごいですね！']
+                primary: ['すごい！', 'とてもじょうず！', 'かんぺき！', 'すばらしい！', 'よくできました！', 'とてもうまい！'],
+                secondary: ['この調子でがんばろう！', 'とても上手に書けています！', 'すごいですね！', 'もっと練習してみましょう！', 'つぎの文字もできそうですね！']
             },
             fair: {
-                primary: ['もう少し！', 'あとちょっと！', 'いいかんじです！'],
-                secondary: ['もう少し練習すればもっと上手になりますよ！', 'がんばって続けましょう！', 'だんだん上手になっています！']
+                primary: ['いいかんじ！', 'もうすこし！', 'がんばってる！', 'じょうずになってる！', 'いいですね！', 'できてきた！'],
+                secondary: ['だんだん上手になっています！', 'つぎはもっとじょうずになるよ！', 'れんしゅうするとうまくなります！', 'とてもがんばっていますね！', 'この調子で続けましょう！']
             },
             poor: {
-                primary: ['がんばろう！', 'れんしゅうしよう！', 'つぎはできるよ！'],
-                secondary: ['練習すればきっと上手になります！', '手本を見て、ゆっくり書いてみましょう！', 'あきらめないで続けましょう！']
+                primary: ['だいじょうぶ！', 'れんしゅうしよう！', 'つぎはできるよ！', 'がんばろう！', 'やってみよう！', 'チャレンジしよう！'],
+                secondary: ['みんな最初は難しいんです', 'ゆっくり書いてみましょう', 'れんしゅうすればきっとできます！', 'あきらめないでがんばろう！', 'いっしょにれんしゅうしましょう！', 'だんだんじょうずになりますよ！']
             }
         };
 
-        // 採点基準の設定
+        // 励まし重視の採点基準（より寛容な設定）
         this.scoringCriteria = {
             excellent: {
-                minConfidence: 0.75,
-                minSimilarity: 0.8,
-                allowedStrokeDifference: 0
+                minConfidence: 0.5,  // 0.75 → 0.5 に緩和
+                minSimilarity: 0.4,  // 0.8 → 0.4 に緩和
+                allowedStrokeDifference: 1  // 0 → 1 に緩和
             },
             fair: {
-                minConfidence: 0.4,
-                minSimilarity: 0.5,
-                allowedStrokeDifference: 1
+                minConfidence: 0.2,  // 0.4 → 0.2 に緩和
+                minSimilarity: 0.2,  // 0.5 → 0.2 に緩和
+                allowedStrokeDifference: 2   // 1 → 2 に緩和
             },
             poor: {
                 minConfidence: 0,
@@ -36,7 +36,7 @@ export class ScoreService {
             }
         };
         
-        console.log('ScoreService初期化完了');
+        console.log('ScoreService初期化完了（励まし重視モード）');
     }
 
     calculateScore(recognized, target, drawingData = null) {
@@ -48,21 +48,32 @@ export class ScoreService {
                 score: 0,
                 details: {
                     reason: 'no_drawing',
-                    message: '文字が描かれていません'
+                    message: '文字が描かれていません',
+                    encouragingNote: '描画を試みることが大切です'
                 }
             };
         }
 
+        // 描画があれば最低でも「もう少し」レベルを保証
+        const hasDrawingAttempt = drawingData.strokes.length > 0;
+        let baseScore = hasDrawingAttempt ? 0.3 : 0; // 描画があれば基本スコア0.3を保証
+
         // 認識結果のチェック
         if (!recognized || !recognized.recognized) {
+            // 認識に失敗しても描画があれば励ましのスコアを付与
+            const drawingEffortScore = this.calculateDrawingEffortScore(drawingData);
+            const encouragingScore = Math.max(baseScore, drawingEffortScore);
+            
             return {
-                level: 'poor',
+                level: encouragingScore >= 0.3 ? 'fair' : 'poor', // 描画があれば最低fair
                 confidence: 0,
-                score: 0,
+                score: encouragingScore,
                 details: {
                     reason: 'recognition_failed',
-                    message: '文字が認識できませんでした',
-                    strokeCount: drawingData.strokes.length
+                    message: '文字が認識できませんでしたが、がんばって書いてくれました',
+                    strokeCount: drawingData.strokes.length,
+                    drawingEffort: drawingEffortScore,
+                    encouragingNote: '描画の努力を評価します'
                 }
             };
         }
@@ -70,12 +81,14 @@ export class ScoreService {
         // 基本的な形状チェック
         const shapeScore = this.calculateShapeScore(recognized, drawingData);
         const confidenceScore = recognized.confidence || 0;
+        const drawingEffortScore = this.calculateDrawingEffortScore(drawingData);
         
-        // 総合スコアの計算（重み付き平均）
-        const totalScore = (shapeScore * 0.6) + (confidenceScore * 0.4);
+        // 励まし重視の総合スコア計算（努力点を加算）
+        const rawScore = (shapeScore * 0.5) + (confidenceScore * 0.3) + (drawingEffortScore * 0.2);
+        const totalScore = Math.max(baseScore, rawScore); // 最低スコアを保証
         
         // レベル判定
-        const level = this.determineLevel(totalScore, recognized, drawingData);
+        const level = this.determineEncouragingLevel(totalScore, recognized, drawingData);
         
         return {
             level: level,
@@ -84,10 +97,12 @@ export class ScoreService {
             details: {
                 shapeScore: shapeScore,
                 confidenceScore: confidenceScore,
+                drawingEffortScore: drawingEffortScore,
                 strokeCount: drawingData.strokes.length,
                 expectedStrokes: recognized.details?.expectedStrokes || 'unknown',
                 similarity: recognized.details?.similarity || 0,
-                features: recognized.details?.features || {}
+                features: recognized.details?.features || {},
+                encouragingNote: '努力を認めて評価しています'
             }
         };
     }
@@ -125,39 +140,72 @@ export class ScoreService {
 
         let qualityScore = 1.0;
 
-        // 点の数による品質評価
+        // 点の数による品質評価（より寛容に）
         const totalPoints = drawingData.strokes.reduce((total, stroke) => total + stroke.length, 0);
-        if (totalPoints < 10) {
-            qualityScore *= 0.5; // 点が少なすぎる
-        } else if (totalPoints > 1000) {
-            qualityScore *= 0.7; // 点が多すぎる（雑な描画の可能性）
+        if (totalPoints < 5) {
+            qualityScore *= 0.7; // 0.5 → 0.7 に緩和
+        } else if (totalPoints > 1500) {
+            qualityScore *= 0.8; // 0.7 → 0.8 に緩和、閾値も1000→1500に緩和
         }
 
-        // 境界ボックスによる品質評価
+        // 境界ボックスによる品質評価（より寛容に）
         if (drawingData.boundingBox) {
             const area = drawingData.boundingBox.width * drawingData.boundingBox.height;
-            if (area < 100) {
-                qualityScore *= 0.6; // 描画が小さすぎる
-            } else if (area > 50000) {
-                qualityScore *= 0.8; // 描画が大きすぎる
+            if (area < 50) {
+                qualityScore *= 0.8; // 0.6 → 0.8 に緩和、閾値も100→50に緩和
+            } else if (area > 80000) {
+                qualityScore *= 0.9; // 0.8 → 0.9 に緩和、閾値も50000→80000に緩和
             }
 
-            // アスペクト比の評価
+            // アスペクト比の評価（より寛容に）
             const aspectRatio = drawingData.boundingBox.width / drawingData.boundingBox.height;
-            if (aspectRatio < 0.3 || aspectRatio > 3) {
-                qualityScore *= 0.8; // 極端に細長い、または平たい
+            if (aspectRatio < 0.2 || aspectRatio > 5) {
+                qualityScore *= 0.9; // 0.8 → 0.9 に緩和、範囲も拡大
             }
         }
 
         return Math.max(0, Math.min(1, qualityScore));
     }
 
-    determineLevel(totalScore, recognized, drawingData) {
-        // よくできました（excellent）の判定
-        if (totalScore >= 0.75 && 
+    // 新しいメソッド：描画の努力を評価
+    calculateDrawingEffortScore(drawingData) {
+        if (!drawingData || !drawingData.strokes) return 0;
+
+        let effortScore = 0;
+
+        // ストローク数による努力評価
+        const strokeCount = drawingData.strokes.length;
+        if (strokeCount > 0) {
+            effortScore += 0.3; // 描画を試みた基本点
+            effortScore += Math.min(0.3, strokeCount * 0.1); // ストローク数に応じた加点
+        }
+
+        // 描画の複雑さによる努力評価
+        const totalPoints = drawingData.strokes.reduce((total, stroke) => total + stroke.length, 0);
+        if (totalPoints > 5) {
+            effortScore += 0.2; // 一定以上の点数で描画した努力
+        }
+
+        // 描画範囲による努力評価
+        if (drawingData.boundingBox) {
+            const area = drawingData.boundingBox.width * drawingData.boundingBox.height;
+            if (area > 100) {
+                effortScore += 0.2; // 適切なサイズで描画した努力
+            }
+        }
+
+        return Math.min(1, effortScore);
+    }
+
+    determineEncouragingLevel(totalScore, recognized, drawingData) {
+        // 描画があれば最低でも「もう少し」レベルを保証
+        const hasDrawingAttempt = drawingData && drawingData.strokes && drawingData.strokes.length > 0;
+        
+        // よくできました（excellent）の判定（より寛容な基準）
+        if (totalScore >= 0.6 && 
             recognized.confidence >= this.scoringCriteria.excellent.minConfidence) {
             
-            // ストローク数の差もチェック
+            // ストローク数の差もチェック（より寛容に）
             if (recognized.details && recognized.details.expectedStrokes) {
                 const strokeDiff = Math.abs(
                     drawingData.strokes.length - recognized.details.expectedStrokes
@@ -170,20 +218,25 @@ export class ScoreService {
             }
         }
 
-        // もう少し（fair）の判定
-        if (totalScore >= 0.4 && 
+        // もう少し（fair）の判定（より寛容な基準）
+        if (totalScore >= 0.25 && 
             recognized.confidence >= this.scoringCriteria.fair.minConfidence) {
             return 'fair';
         }
 
-        // がんばろう（poor）
+        // 描画があれば最低でも「もう少し」レベル
+        if (hasDrawingAttempt && totalScore >= 0.1) {
+            return 'fair';
+        }
+
+        // がんばろう（poor）- 描画がない場合のみ
         return 'poor';
     }
 
     generateFeedback(score, recognized, target) {
         const levelMessages = this.feedbackMessages[score.level];
         if (!levelMessages) {
-            return this.getDefaultFeedback();
+            return this.getEncouragingDefaultFeedback();
         }
 
         // ランダムにメッセージを選択
@@ -194,48 +247,63 @@ export class ScoreService {
             Math.floor(Math.random() * levelMessages.secondary.length)
         ];
 
+        // 建設的なフィードバックを必ず提供
+        const constructiveSuggestion = this.getConstructiveSuggestion(score, recognized, target);
+        const encouragingNote = this.getEncouragingNote(score, recognized);
+
         return {
             message: primaryMessage,
             encouragement: secondaryMessage,
-            suggestion: this.getSuggestion(score, recognized, target),
-            icon: this.getIcon(score.level),
-            showExample: this.shouldShowExample(score)
+            suggestion: constructiveSuggestion,
+            encouragingNote: encouragingNote,
+            icon: this.getEncouragingIcon(score.level),
+            showExample: this.shouldShowExample(score),
+            alwaysPositive: true // 常に前向きなフィードバック
         };
     }
 
-    getSuggestion(score, recognized, target) {
+    getConstructiveSuggestion(score, recognized, target) {
         const suggestions = {
             excellent: [
                 '次の文字も練習してみましょう！',
-                'とても上手です！',
-                null // 提案なしの場合もある
+                'とても上手です！この調子で続けましょう！',
+                'すばらしい！他の文字にもチャレンジしてみませんか？',
+                'かんぺきです！もっと練習して上達しましょう！'
             ],
             fair: [
-                '手本を見て、もう一度書いてみましょう',
-                'ゆっくり丁寧に書いてみましょう',
-                'ストロークの順番を意識してみましょう'
+                'いいかんじです！もう一度書いてみましょう',
+                'だんだん上手になっています！ゆっくり書いてみましょう',
+                'がんばっていますね！手本を見ながら練習しましょう',
+                'もうすこしです！ストロークを意識してみましょう',
+                'じょうずになってきました！この調子で続けましょう'
             ],
             poor: [
-                '手本を見て、ゆっくり書いてみましょう',
-                '一画ずつ丁寧に書いてみましょう',
-                '大きく書いてみましょう'
+                'だいじょうぶ！手本を見て、ゆっくり書いてみましょう',
+                'みんな最初は難しいです。一画ずつ丁寧に書いてみましょう',
+                'がんばって！大きく書いてみると書きやすいですよ',
+                'れんしゅうすればきっとできます！ゆっくりやってみましょう',
+                'あきらめないで！いっしょにがんばりましょう'
             ]
         };
 
         const levelSuggestions = suggestions[score.level] || suggestions.fair;
         
-        // 特定の問題に基づく提案
+        // 特定の問題に基づく建設的な提案
         if (score.details) {
             if (score.details.reason === 'no_drawing') {
-                return '画面に文字を書いてみましょう';
+                return 'だいじょうぶ！画面に指で文字を書いてみましょう。ゆっくりでいいですよ！';
+            }
+            
+            if (score.details.reason === 'recognition_failed') {
+                return 'がんばって書いてくれました！手本を見ながらもう一度やってみましょう！';
             }
             
             if (score.details.strokeCount !== score.details.expectedStrokes) {
                 const diff = score.details.strokeCount - score.details.expectedStrokes;
                 if (diff > 0) {
-                    return 'ストロークが多すぎるかもしれません';
+                    return 'たくさん書いてくれました！手本と同じ数の線で書いてみましょう';
                 } else {
-                    return 'ストロークが足りないかもしれません';
+                    return 'いいかんじです！もう少し線を足してみましょう';
                 }
             }
         }
@@ -243,11 +311,32 @@ export class ScoreService {
         return levelSuggestions[Math.floor(Math.random() * levelSuggestions.length)];
     }
 
-    getIcon(level) {
+    // 新しいメソッド：励ましのメモを生成
+    getEncouragingNote(score, recognized) {
+        const notes = [
+            'がんばっていることが伝わります！',
+            'れんしゅうする気持ちがすばらしいです！',
+            'チャレンジする心が大切です！',
+            'だんだん上手になっていますよ！',
+            'あきらめずに続けることが大事です！',
+            'みんなで応援しています！'
+        ];
+
+        // スコアレベルに応じた特別なメモ
+        if (score.level === 'excellent') {
+            return 'とてもすばらしい出来です！';
+        } else if (score.level === 'fair') {
+            return 'がんばっている様子がよく分かります！';
+        } else {
+            return notes[Math.floor(Math.random() * notes.length)];
+        }
+    }
+
+    getEncouragingIcon(level) {
         const icons = {
-            excellent: '😊',
-            fair: '🙂',
-            poor: '😐'
+            excellent: '🌟', // より励ましの星アイコン
+            fair: '😊',      // より前向きな笑顔
+            poor: '🙂'       // 中性的だが前向きな表情
         };
         return icons[level] || '🙂';
     }
@@ -263,14 +352,21 @@ export class ScoreService {
         return feedback.encouragement;
     }
 
-    getDefaultFeedback() {
+    getEncouragingDefaultFeedback() {
         return {
-            message: 'がんばりましょう！',
-            encouragement: '練習すればきっと上手になります！',
-            suggestion: '手本を見て、ゆっくり書いてみましょう',
+            message: 'だいじょうぶ！',
+            encouragement: 'みんなで応援しています！れんしゅうすればきっとできますよ！',
+            suggestion: 'あきらめないで、いっしょにがんばりましょう！',
+            encouragingNote: 'チャレンジする気持ちがすばらしいです！',
             icon: '🙂',
-            showExample: true
+            showExample: true,
+            alwaysPositive: true
         };
+    }
+
+    // 後方互換性のために残す
+    getDefaultFeedback() {
+        return this.getEncouragingDefaultFeedback();
     }
 
     // デバッグ用：採点の詳細情報を取得

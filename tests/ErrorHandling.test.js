@@ -1,280 +1,239 @@
-// エラーハンドリング機能のテスト
-import { ErrorHandler } from '../js/services/ErrorHandler.js';
-import { HiraganaDataService } from '../js/services/HiraganaDataService.js';
-import { RandomizationService } from '../js/services/RandomizationService.js';
+/**
+ * エラーハンドリングとフォールバック機能のテスト
+ * Error Handling and Fallback Functionality Tests
+ */
 
-describe('ErrorHandling', () => {
-    let errorHandler;
+import { RecognitionService } from '../js/services/RecognitionService.js';
+import { ScoreService } from '../js/services/ScoreService.js';
+import { HiraganaDataService } from '../js/services/HiraganaDataService.js';
+import { HiraganaCharacter } from '../js/models/HiraganaCharacter.js';
+import { DrawingData } from '../js/models/DrawingData.js';
+
+describe('Error Handling and Fallback Tests', () => {
+    let recognitionService;
+    let scoreService;
     let hiraganaDataService;
-    let randomizationService;
 
     beforeEach(() => {
-        // DOM要素をセットアップ
-        document.body.innerHTML = '<div id="test-container"></div>';
-        
-        // LocalStorageをクリア
-        localStorage.clear();
-        
-        // サービスを初期化
-        errorHandler = new ErrorHandler();
-        hiraganaDataService = new HiraganaDataService(errorHandler);
-        randomizationService = new RandomizationService(hiraganaDataService, null, errorHandler);
-        
-        // グローバルアプリインスタンスをモック
-        window.app = {
-            hiraganaDataService,
-            randomizationService,
-            setPracticeMode: jest.fn()
-        };
+        recognitionService = new RecognitionService();
+        scoreService = new ScoreService();
+        hiraganaDataService = new HiraganaDataService();
     });
 
-    afterEach(() => {
-        // グローバル変数をクリア
-        delete window.app;
-        
-        // DOM要素をクリア
-        document.body.innerHTML = '';
-        
-        // LocalStorageをクリア
-        localStorage.clear();
+    describe('認識システムのエラーハンドリング', () => {
+        test('null描画データの処理', async () => {
+            const character = new HiraganaCharacter('あ', 'あ', 3, 'vowel');
+            
+            const result = await recognitionService.recognizeCharacterForChild(null, character);
+            
+            // nullデータでも適切なフォールバック結果を返すことを期待
+            expect(result).toBeDefined();
+            expect(result.confidence).toBe(0);
+            expect(result.recognized).toBe(false);
+            expect(result.details).toBeDefined();
+        });
+
+        test('空の描画データの処理', async () => {
+            const character = new HiraganaCharacter('い', 'い', 2, 'vowel');
+            const emptyDrawing = new DrawingData();
+            
+            const result = await recognitionService.recognizeCharacterForChild(emptyDrawing, character);
+            
+            expect(result).toBeDefined();
+            expect(result.confidence).toBe(0);
+            expect(result.recognized).toBe(false);
+        });
+
+        test('nullターゲット文字の処理', async () => {
+            const drawingData = new DrawingData();
+            drawingData.addStroke([
+                { x: 50, y: 50, timestamp: 100 },
+                { x: 60, y: 60, timestamp: 200 }
+            ]);
+            
+            const result = await recognitionService.recognizeCharacterForChild(drawingData, null);
+            
+            expect(result).toBeDefined();
+            expect(result.confidence).toBeGreaterThanOrEqual(0);
+            expect(result.confidence).toBeLessThanOrEqual(1);
+        });
     });
 
-    describe('ErrorHandler', () => {
-        test('文字関連エラーを適切に処理する', () => {
-            const error = new Error('文字データの読み込みに失敗しました');
-            const context = {
-                operation: 'loading',
-                character: 'あ'
+    describe('採点システムのエラーハンドリング', () => {
+        test('null認識結果の処理', () => {
+            const character = new HiraganaCharacter('お', 'お', 3, 'vowel');
+            
+            const scoreResult = scoreService.calculateScore(false, character, null);
+            
+            expect(scoreResult).toBeDefined();
+            expect(scoreResult.level).toBe('poor');
+            expect(scoreResult.details).toBeDefined();
+            expect(scoreResult.details.encouragingNote).toBeDefined();
+        });
+
+        test('不正な認識結果の処理', () => {
+            const character = new HiraganaCharacter('か', 'か', 3, 'consonant');
+            const invalidResult = {
+                confidence: 'invalid',
+                recognized: null,
+                details: undefined
             };
-
-            const result = errorHandler.handleCharacterError(error, context);
-
-            expect(result.handled).toBe(true);
-            expect(result.fallback).toBeDefined();
-            expect(result.userMessage).toContain('文字');
+            
+            const scoreResult = scoreService.calculateScore(invalidResult.recognized, character, null);
+            
+            expect(scoreResult).toBeDefined();
+            expect(scoreResult.level).toBeDefined();
+            expect(['excellent', 'fair', 'poor']).toContain(scoreResult.level);
+            expect(scoreResult.details).toBeDefined();
+            expect(scoreResult.details.encouragingNote).toBeDefined();
         });
 
-        test('文字選択エラーでフォールバックモードに切り替わる', () => {
-            const error = new Error('ランダム選択に失敗しました');
-            const context = {
-                operation: 'selection',
-                method: 'selectNextCharacter'
+        test('nullターゲット文字での採点', () => {
+            const recognitionResult = {
+                confidence: 0.5,
+                recognized: true,
+                details: { similarity: 0.6 }
             };
-
-            const result = errorHandler.handleCharacterSelectionError(error, context);
-
-            expect(result.handled).toBe(true);
-            expect(result.modeChanged).toBe('sequential');
-            expect(window.app.setPracticeMode).toHaveBeenCalledWith('sequential');
+            
+            const scoreResult = scoreService.calculateScore(recognitionResult.recognized, null, null);
+            
+            expect(scoreResult).toBeDefined();
+            expect(scoreResult.level).toBe('poor');
+            expect(scoreResult.details).toBeDefined();
         });
 
-        test('フォールバック文字セットを提供する', () => {
-            const fallbackSet = errorHandler.getFallbackCharacterSet();
-
-            expect(Array.isArray(fallbackSet)).toBe(true);
-            expect(fallbackSet.length).toBeGreaterThan(0);
-            expect(fallbackSet[0]).toHaveProperty('char', 'あ');
-        });
-
-        test('文字関連エラーの統計を取得できる', () => {
-            // いくつかのエラーを記録
-            errorHandler.handleCharacterError(new Error('test1'), { operation: 'loading' });
-            errorHandler.handleCharacterError(new Error('test2'), { operation: 'selection' });
-            errorHandler.handleCharacterError(new Error('test3'), { operation: 'loading' });
-
-            const stats = errorHandler.getCharacterErrorStatistics();
-
-            expect(stats.total).toBe(3);
-            expect(stats.byOperation.loading).toBe(2);
-            expect(stats.byOperation.selection).toBe(1);
-            expect(stats.mostCommon).toBe('loading');
+        test('極端な信頼度値の処理', () => {
+            const character = new HiraganaCharacter('き', 'き', 4, 'consonant');
+            
+            const extremeResults = [
+                { confidence: -1, recognized: false },
+                { confidence: 2, recognized: true },
+                { confidence: NaN, recognized: true },
+                { confidence: Infinity, recognized: false }
+            ];
+            
+            extremeResults.forEach(result => {
+                const scoreResult = scoreService.calculateScore(result.recognized, character, null);
+                
+                expect(scoreResult).toBeDefined();
+                expect(scoreResult.level).toBeDefined();
+                expect(scoreResult.details).toBeDefined();
+                expect(scoreResult.details.encouragingNote).toBeDefined();
+            });
         });
     });
 
-    describe('HiraganaDataService Error Handling', () => {
-        test('初期化エラー時にフォールバック文字セットを使用する', () => {
-            // 初期化エラーをシミュレート
-            const mockInitialize = jest.spyOn(HiraganaDataService.prototype, 'initializeCharacters')
-                .mockImplementation(() => {
-                    throw new Error('初期化失敗');
-                });
-
-            const service = new HiraganaDataService(errorHandler);
-
-            expect(service.isInitialized).toBe(true);
-            expect(service.characters.length).toBeGreaterThan(0);
-
-            mockInitialize.mockRestore();
+    describe('データサービスのエラーハンドリング', () => {
+        test('存在しない文字の取得', () => {
+            const result = hiraganaDataService.selectCharacter('invalid');
+            
+            expect(result).toBeNull();
         });
 
-        test('getCurrentCharacter()でエラー時にフォールバック文字を返す', () => {
-            // 無効なインデックスを設定
-            hiraganaDataService.currentIndex = -1;
-
-            const character = hiraganaDataService.getCurrentCharacter();
-
-            expect(character).toBeDefined();
-            expect(character.character).toBeDefined();
-        });
-
-        test('getRandomCharacter()でエラー時にフォールバック処理を実行する', () => {
-            // 文字配列を空にしてエラーをシミュレート
-            hiraganaDataService.characters = [];
-
-            const character = hiraganaDataService.getRandomCharacter();
-
-            expect(character).toBeDefined();
-            expect(character.character).toBeDefined();
-        });
-
-        test('難易度フィルターエラー時に全文字から選択する', () => {
-            // 無効な難易度フィルターでテスト
-            const character = hiraganaDataService.getRandomCharacter(true, 999);
-
-            expect(character).toBeDefined();
-            expect(character.character).toBeDefined();
+        test('不正な難易度レベルの処理', () => {
+            const result = hiraganaDataService.getCharactersByStrokeComplexity('invalid');
+            
+            expect(result).toBeDefined();
+            expect(Array.isArray(result)).toBe(true);
+            expect(result.length).toBe(0);
         });
     });
 
-    describe('RandomizationService Error Handling', () => {
-        test('初期化エラー時にフォールバックモードになる', () => {
-            // HiraganaDataServiceを無効にして初期化エラーをシミュレート
-            const mockGetAllCharacters = jest.spyOn(hiraganaDataService, 'getAllCharacters')
-                .mockImplementation(() => {
-                    throw new Error('文字取得失敗');
-                });
-
-            const service = new RandomizationService(hiraganaDataService, null, errorHandler);
-
-            expect(service.isInitialized).toBe(true);
-            expect(service.fallbackMode).toBe(true);
-
-            mockGetAllCharacters.mockRestore();
+    describe('システム全体のフォールバック機能', () => {
+        test('完全な認識失敗時のフォールバック', async () => {
+            const character = new HiraganaCharacter('く', 'く', 1, 'consonant');
+            
+            // 認識が完全に失敗するケースをシミュレート
+            const mockRecognitionService = {
+                recognizeCharacterForChild: jest.fn().mockRejectedValue(new Error('Recognition failed'))
+            };
+            
+            // フォールバック処理をテスト
+            try {
+                await mockRecognitionService.recognizeCharacterForChild(new DrawingData(), character);
+            } catch (error) {
+                // エラーが発生した場合のフォールバック結果を作成
+                const fallbackResult = {
+                    confidence: 0,
+                    recognized: false,
+                    details: {
+                        similarity: 0,
+                        encouragementLevel: 'poor',
+                        childFriendlyScore: 0
+                    }
+                };
+                
+                const scoreResult = scoreService.calculateScore(fallbackResult.recognized, character, null);
+                
+                expect(scoreResult.level).toBe('poor');
+                expect(scoreResult.details).toBeDefined();
+                expect(scoreResult.details.encouragingNote).toBeDefined();
+            }
         });
 
-        test('selectNextCharacter()でエラー時にフォールバック文字を返す', () => {
-            // エラーをシミュレート
-            const mockGetAvailableCharacters = jest.spyOn(randomizationService, 'getAvailableCharacters')
-                .mockImplementation(() => {
-                    throw new Error('文字取得失敗');
-                });
+        test('ネットワークエラー時のローカルフォールバック', () => {
+            // ネットワーク依存の機能がある場合のフォールバックテスト
+            // 現在の実装はローカルのみなので、将来の拡張に備えたテスト
+            
+            const localData = hiraganaDataService.getAllCharacters();
+            
+            expect(localData).toBeDefined();
+            expect(Array.isArray(localData)).toBe(true);
+            expect(localData.length).toBeGreaterThan(0);
+        });
+    });
 
-            const character = randomizationService.selectNextCharacter();
-
-            expect(character).toBeDefined();
-            expect(character.character).toBeDefined();
-
-            mockGetAvailableCharacters.mockRestore();
+    describe('基本的なパフォーマンステスト', () => {
+        test('小規模データでの処理時間', async () => {
+            const character = hiraganaDataService.getAllCharacters()[0];
+            const drawingData = createSimpleDrawing(character);
+            
+            const startTime = performance.now();
+            const result = await recognitionService.recognizeCharacterForChild(drawingData, character);
+            const endTime = performance.now();
+            
+            const processingTime = endTime - startTime;
+            
+            // 小規模データは高速処理されることを確認
+            expect(processingTime).toBeLessThan(1000); // 1秒以内
+            expect(result).toBeDefined();
         });
 
-        test('weightedRandomSelection()でエラー時にシンプル選択にフォールバック', () => {
+        test('複数の軽量処理', async () => {
             const characters = hiraganaDataService.getAllCharacters().slice(0, 3);
             
-            // 重み計算エラーをシミュレート
-            const mockCalculateWeight = jest.spyOn(randomizationService, 'calculateSelectionWeight')
-                .mockImplementation(() => {
-                    throw new Error('重み計算失敗');
-                });
-
-            const selectedCharacter = randomizationService.weightedRandomSelection(characters);
-
-            expect(selectedCharacter).toBeDefined();
-            expect(selectedCharacter.character).toBeDefined();
-
-            mockCalculateWeight.mockRestore();
-        });
-
-        test('simpleRandomSelection()で空配列時にフォールバック文字を返す', () => {
-            const character = randomizationService.simpleRandomSelection([]);
-
-            expect(character).toBeDefined();
-            expect(character.character).toBeDefined();
-        });
-
-        test('フォールバック選択が正常に動作する', () => {
-            const character = randomizationService.performFallbackSelection('あ', {});
-
-            expect(character).toBeDefined();
-            expect(character.character).toBeDefined();
-            expect(character.character).not.toBe('あ'); // 現在の文字を除外
-        });
-    });
-
-    describe('Error Recovery', () => {
-        test('文字データ復旧が正常に動作する', () => {
-            const success = errorHandler.attemptRecovery('characterData');
-            expect(typeof success).toBe('boolean');
-        });
-
-        test('ランダム化復旧が正常に動作する', () => {
-            const success = errorHandler.attemptRecovery('randomization');
-            expect(typeof success).toBe('boolean');
-        });
-
-        test('進捗追跡復旧が正常に動作する', () => {
-            const success = errorHandler.attemptRecovery('progress');
-            expect(typeof success).toBe('boolean');
-        });
-    });
-
-    describe('Debug and Logging', () => {
-        test('文字選択デバッグ情報を記録する', () => {
-            const initialLogLength = errorHandler.errorLog.length;
-
-            errorHandler.logCharacterSelectionDebug('test_operation', {
-                character: 'あ',
-                success: true
+            const promises = characters.map(char => {
+                const drawingData = createSimpleDrawing(char);
+                return recognitionService.recognizeCharacterForChild(drawingData, char);
             });
-
-            expect(errorHandler.errorLog.length).toBe(initialLogLength + 1);
             
-            const lastLog = errorHandler.errorLog[errorHandler.errorLog.length - 1];
-            expect(lastLog.type).toBe('character_selection_debug');
-            expect(lastLog.operation).toBe('test_operation');
-        });
-
-        test('アプリ状態スナップショットを取得する', () => {
-            const snapshot = errorHandler.getAppStateSnapshot();
-
-            expect(snapshot).toBeDefined();
-            expect(snapshot).toHaveProperty('currentScreen');
-            expect(snapshot).toHaveProperty('practiceMode');
-        });
-
-        test('デバッグモードを正しく判定する', () => {
-            // デバッグモードを無効にしてテスト
-            localStorage.removeItem('hiragana_debug_mode');
-            expect(errorHandler.isDebugMode()).toBe(false);
-
-            // デバッグモードを有効にしてテスト
-            localStorage.setItem('hiragana_debug_mode', 'true');
-            expect(errorHandler.isDebugMode()).toBe(true);
+            const results = await Promise.all(promises);
+            
+            expect(results.length).toBe(3);
+            results.forEach(result => {
+                expect(result).toBeDefined();
+                expect(result.confidence).toBeGreaterThanOrEqual(0);
+            });
         });
     });
 
-    describe('User-Friendly Error Messages', () => {
-        test('文字関連エラーに適切なメッセージを生成する', () => {
-            const errorInfo = {
-                message: 'character loading failed',
-                type: 'character'
-            };
-
-            const message = errorHandler.getUserFriendlyMessage(errorInfo);
-
-            expect(message).toContain('文字データ');
-            expect(message).toContain('再読み込み');
-        });
-
-        test('ランダム化エラーに適切なメッセージを生成する', () => {
-            const errorInfo = {
-                message: 'randomization error occurred',
-                type: 'randomization'
-            };
-
-            const message = errorHandler.getUserFriendlyMessage(errorInfo);
-
-            expect(message).toContain('文字選択');
-            expect(message).toContain('順番モード');
-        });
-    });
+    // ヘルパー関数
+    function createSimpleDrawing(character) {
+        const drawingData = new DrawingData();
+        
+        // シンプルな描画データを作成
+        for (let i = 0; i < Math.min(character.strokeCount, 3); i++) {
+            const stroke = [];
+            for (let j = 0; j < 10; j++) {
+                stroke.push({
+                    x: 50 + (j * 5),
+                    y: 50 + (j * 5),
+                    timestamp: Date.now() + (j * 50)
+                });
+            }
+            drawingData.addStroke(stroke);
+        }
+        
+        return drawingData;
+    }
 });

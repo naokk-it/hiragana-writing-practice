@@ -250,11 +250,29 @@ export class MainMenuComponent {
      * 難易度ボタンを描画
      */
     renderDifficultyButtons(progressData, recommendedDifficulty) {
+        // 新しい3段階難易度システム（画数・複雑さベース）
         const difficulties = [
-            { level: 1, name: 'かんたん', icon: '🌱', description: 'あ行 (あいうえお)' },
-            { level: 2, name: 'ふつう', icon: '🌿', description: 'か行〜な行' },
-            { level: 3, name: 'むずかしい', icon: '🌳', description: 'は行〜や行' },
-            { level: 4, name: 'とてもむずかしい', icon: '🏔️', description: 'ら行〜わ行' }
+            { 
+                level: 'beginner', 
+                name: 'はじめて', 
+                icon: '🌱', 
+                description: '1-2画の簡単な文字',
+                characters: ['く', 'し', 'つ', 'て', 'そ', 'の', 'へ', 'ん', 'い', 'う', 'り']
+            },
+            { 
+                level: 'intermediate', 
+                name: 'なれてきた', 
+                icon: '🌿', 
+                description: '3画の文字',
+                characters: ['あ', 'お', 'か', 'け', 'こ', 'さ', 'せ', 'に', 'は', 'ま', 'も', 'や', 'ろ', 'わ', 'え', 'ひ', 'る', 'れ']
+            },
+            { 
+                level: 'advanced', 
+                name: 'じょうず', 
+                icon: '🌳', 
+                description: '4画以上の複雑な文字',
+                characters: ['き', 'た', 'な', 'ぬ', 'ね', 'ふ', 'ほ', 'む', 'め', 'ゆ', 'よ', 'ら', 'を']
+            }
         ];
 
         return difficulties.map(diff => {
@@ -270,6 +288,9 @@ export class MainMenuComponent {
                         ${isRecommended ? '<span class="recommended-badge">おすすめ</span>' : ''}
                     </div>
                     <div class="difficulty-description">${diff.description}</div>
+                    <div class="character-preview">
+                        ${diff.characters.slice(0, 8).join(' ')}${diff.characters.length > 8 ? '...' : ''}
+                    </div>
                     <div class="difficulty-progress">
                         <div class="progress-bar">
                             <div class="progress-fill" style="width: ${(progress.masteryRate * 100).toFixed(0)}%"></div>
@@ -323,10 +344,9 @@ export class MainMenuComponent {
         if (!recommendedDifficulty) return '';
 
         const difficultyNames = {
-            1: 'かんたん',
-            2: 'ふつう', 
-            3: 'むずかしい',
-            4: 'とてもむずかしい'
+            'beginner': 'はじめて',
+            'intermediate': 'なれてきた',
+            'advanced': 'じょうず'
         };
 
         return `
@@ -343,16 +363,18 @@ export class MainMenuComponent {
      * 推奨難易度を計算
      */
     calculateRecommendedDifficulty(progressData) {
-        // 各難易度の習得率をチェック
-        for (let difficulty = 1; difficulty <= 4; difficulty++) {
-            const progress = progressData[difficulty];
+        // 新しい3段階難易度システムに対応
+        const levels = ['beginner', 'intermediate', 'advanced'];
+        
+        for (const level of levels) {
+            const progress = progressData[level];
             if (!progress || progress.masteryRate < 0.7) {
-                return difficulty;
+                return level;
             }
         }
         
         // 全て習得済みの場合は最高難易度を推奨
-        return 4;
+        return 'advanced';
     }
 
     /**
@@ -363,7 +385,7 @@ export class MainMenuComponent {
         const difficultyButtons = this.element.querySelectorAll('.difficulty-button');
         difficultyButtons.forEach(button => {
             button.addEventListener('click', (e) => {
-                const difficulty = parseInt(e.currentTarget.dataset.difficulty);
+                const difficulty = e.currentTarget.dataset.difficulty;
                 this.handleButtonClick(e, () => this.onDifficultyPracticeStart(difficulty));
             });
         });
@@ -388,7 +410,7 @@ export class MainMenuComponent {
         // アニメーション効果付きで画面遷移
         this.element.classList.add('fade-out');
         setTimeout(() => {
-            this.app.startPractice('difficulty', { difficultyFilter: difficulty });
+            this.app.startPractice('strokeComplexity', { strokeComplexityLevel: difficulty });
             this.element.classList.remove('fade-out');
         }, 300);
     }

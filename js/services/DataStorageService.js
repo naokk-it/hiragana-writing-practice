@@ -42,6 +42,15 @@ export class DataStorageService {
                 return;
             }
 
+            // データ移行が必要かチェック
+            if (this.migrationService && this.migrationService.isMigrationNeeded()) {
+                console.log('データ移行が必要です');
+                const migrationSuccess = await this.performMigration();
+                if (!migrationSuccess) {
+                    console.warn('データ移行に失敗しましたが、処理を続行します');
+                }
+            }
+
             // 既存データの整合性をチェック
             this.validateStoredData();
             

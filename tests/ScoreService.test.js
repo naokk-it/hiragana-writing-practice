@@ -17,8 +17,8 @@ describe('ScoreService', () => {
 
         test('should initialize with scoring criteria', () => {
             expect(scoreService.scoringCriteria).toBeDefined();
-            expect(scoreService.scoringCriteria.excellent.minConfidence).toBe(0.75);
-            expect(scoreService.scoringCriteria.fair.minConfidence).toBe(0.4);
+            expect(scoreService.scoringCriteria.excellent.minConfidence).toBe(0.5);
+            expect(scoreService.scoringCriteria.fair.minConfidence).toBe(0.2);
             expect(scoreService.scoringCriteria.poor.minConfidence).toBe(0);
         });
     });
@@ -43,15 +43,15 @@ describe('ScoreService', () => {
             expect(result.details.reason).toBe('no_drawing');
         });
 
-        test('should return poor score for failed recognition', () => {
+        test('should return fair score for failed recognition with drawing attempt', () => {
             const drawingData = { strokes: [[{ x: 10, y: 10 }]] };
             const recognized = { recognized: false };
             
             const result = scoreService.calculateScore(recognized, 'あ', drawingData);
             
-            expect(result.level).toBe('poor');
+            expect(result.level).toBe('fair'); // 描画があれば最低fair
             expect(result.confidence).toBe(0);
-            expect(result.score).toBe(0);
+            expect(result.score).toBeGreaterThan(0); // 努力点が付与される
             expect(result.details.reason).toBe('recognition_failed');
         });
 
@@ -160,10 +160,10 @@ describe('ScoreService', () => {
         });
 
         test('should penalize drawings with too many points', () => {
-            const manyPoints = Array.from({ length: 1001 }, (_, i) => ({ x: i, y: i }));
+            const manyPoints = Array.from({ length: 1501 }, (_, i) => ({ x: i, y: i }));
             const drawingData = {
                 strokes: [manyPoints],
-                boundingBox: { x: 0, y: 0, width: 1000, height: 1000 }
+                boundingBox: { x: 0, y: 0, width: 1500, height: 1500 }
             };
             
             const quality = scoreService.calculateDrawingQuality(drawingData);
@@ -201,7 +201,56 @@ describe('ScoreService', () => {
         });
     });
 
-    describe('determineLevel', () => {
+    describe('calculateDrawingEffortScore', () => {
+        test('should return 0 for invalid drawing data', () => {
+            const effort = scoreService.calculateDrawingEffortScore(null);
+            expect(effort).toBe(0);
+        });
+
+        test('should give basic effort score for any drawing attempt', () => {
+            const drawingData = {
+                strokes: [[{ x: 10, y: 10 }]],
+                boundingBox: { x: 10, y: 10, width: 50, height: 50 }
+            };
+            
+            const effort = scoreService.calculateDrawingEffortScore(drawingData);
+            expect(effort).toBeGreaterThan(0);
+        });
+
+        test('should give higher effort score for more strokes', () => {
+            const singleStroke = {
+                strokes: [[{ x: 10, y: 10 }]],
+                boundingBox: { x: 10, y: 10, width: 50, height: 50 }
+            };
+            const multipleStrokes = {
+                strokes: [[{ x: 10, y: 10 }], [{ x: 20, y: 20 }], [{ x: 30, y: 30 }]],
+                boundingBox: { x: 10, y: 10, width: 50, height: 50 }
+            };
+            
+            const effortSingle = scoreService.calculateDrawingEffortScore(singleStroke);
+            const effortMultiple = scoreService.calculateDrawingEffortScore(multipleStrokes);
+            
+            expect(effortMultiple).toBeGreaterThan(effortSingle);
+        });
+
+        test('should give effort score for drawing complexity', () => {
+            const simpleDrawing = {
+                strokes: [[{ x: 10, y: 10 }, { x: 15, y: 15 }]],
+                boundingBox: { x: 10, y: 10, width: 50, height: 50 }
+            };
+            const complexDrawing = {
+                strokes: [Array.from({ length: 20 }, (_, i) => ({ x: i * 5, y: i * 5 }))],
+                boundingBox: { x: 0, y: 0, width: 100, height: 100 }
+            };
+            
+            const effortSimple = scoreService.calculateDrawingEffortScore(simpleDrawing);
+            const effortComplex = scoreService.calculateDrawingEffortScore(complexDrawing);
+            
+            expect(effortComplex).toBeGreaterThan(effortSimple);
+        });
+    });
+
+    describe('determineEncouragingLevel', () => {
         test('should return excellent for high scores with good confidence', () => {
             const recognized = {
                 confidence: 0.9,
@@ -209,7 +258,7 @@ describe('ScoreService', () => {
             };
             const drawingData = { strokes: [[], [], []] }; // 3ストローク
             
-            const level = scoreService.determineLevel(0.8, recognized, drawingData);
+            const level = scoreService.determineEncouragingLevel(0.8, recognized, drawingData);
             expect(level).toBe('excellent');
         });
 
@@ -220,19 +269,19 @@ describe('ScoreService', () => {
             };
             const drawingData = { strokes: [[], []] }; // 2ストローク
             
-            const level = scoreService.determineLevel(0.5, recognized, drawingData);
+            const level = scoreService.determineEncouragingLevel(0.5, recognized, drawingData);
             expect(level).toBe('fair');
         });
 
-        test('should return poor for low scores', () => {
+        test('should return fair for low scores with drawing attempt', () => {
             const recognized = {
                 confidence: 0.2,
                 details: { expectedStrokes: 3 }
             };
             const drawingData = { strokes: [[]] }; // 1ストローク
             
-            const level = scoreService.determineLevel(0.2, recognized, drawingData);
-            expect(level).toBe('poor');
+            const level = scoreService.determineEncouragingLevel(0.2, recognized, drawingData);
+            expect(level).toBe('fair'); // 描画があれば最低fair
         });
 
         test('should consider stroke count difference for excellent level', () => {
@@ -243,8 +292,8 @@ describe('ScoreService', () => {
             const drawingDataGood = { strokes: [[], [], []] }; // 正確
             const drawingDataBad = { strokes: [[], [], [], [], []] }; // 多すぎる
             
-            const levelGood = scoreService.determineLevel(0.8, recognized, drawingDataGood);
-            const levelBad = scoreService.determineLevel(0.8, recognized, drawingDataBad);
+            const levelGood = scoreService.determineEncouragingLevel(0.8, recognized, drawingDataGood);
+            const levelBad = scoreService.determineEncouragingLevel(0.8, recognized, drawingDataBad);
             
             expect(levelGood).toBe('excellent');
             expect(levelBad).not.toBe('excellent');
@@ -258,8 +307,9 @@ describe('ScoreService', () => {
             
             expect(feedback.message).toBeDefined();
             expect(feedback.encouragement).toBeDefined();
-            expect(feedback.icon).toBe('😊');
+            expect(feedback.icon).toBe('🌟');
             expect(feedback.showExample).toBe(false);
+            expect(feedback.alwaysPositive).toBe(true);
         });
 
         test('should generate feedback for fair level', () => {
@@ -268,8 +318,9 @@ describe('ScoreService', () => {
             
             expect(feedback.message).toBeDefined();
             expect(feedback.encouragement).toBeDefined();
-            expect(feedback.icon).toBe('🙂');
+            expect(feedback.icon).toBe('😊');
             expect(feedback.showExample).toBe(true);
+            expect(feedback.alwaysPositive).toBe(true);
         });
 
         test('should generate feedback for poor level', () => {
@@ -278,30 +329,33 @@ describe('ScoreService', () => {
             
             expect(feedback.message).toBeDefined();
             expect(feedback.encouragement).toBeDefined();
-            expect(feedback.icon).toBe('😐');
+            expect(feedback.icon).toBe('🙂');
             expect(feedback.showExample).toBe(true);
+            expect(feedback.alwaysPositive).toBe(true);
         });
 
         test('should return default feedback for unknown level', () => {
             const score = { level: 'unknown', confidence: 0.5 };
             const feedback = scoreService.generateFeedback(score, {}, 'あ');
             
-            expect(feedback.message).toBe('がんばりましょう！');
+            expect(feedback.message).toBe('だいじょうぶ！');
             expect(feedback.showExample).toBe(true);
+            expect(feedback.alwaysPositive).toBe(true);
         });
     });
 
-    describe('getSuggestion', () => {
+    describe('getConstructiveSuggestion', () => {
         test('should provide appropriate suggestions for excellent level', () => {
             const score = { level: 'excellent', details: {} };
-            const suggestion = scoreService.getSuggestion(score, {}, 'あ');
+            const suggestion = scoreService.getConstructiveSuggestion(score, {}, 'あ');
             
-            expect(typeof suggestion === 'string' || suggestion === null).toBe(true);
+            expect(typeof suggestion).toBe('string');
+            expect(suggestion.length).toBeGreaterThan(0);
         });
 
         test('should suggest viewing example for poor level', () => {
             const score = { level: 'poor', details: {} };
-            const suggestion = scoreService.getSuggestion(score, {}, 'あ');
+            const suggestion = scoreService.getConstructiveSuggestion(score, {}, 'あ');
             
             expect(suggestion).toBeDefined();
             expect(typeof suggestion).toBe('string');
@@ -312,9 +366,9 @@ describe('ScoreService', () => {
                 level: 'poor', 
                 details: { reason: 'no_drawing' } 
             };
-            const suggestion = scoreService.getSuggestion(score, {}, 'あ');
+            const suggestion = scoreService.getConstructiveSuggestion(score, {}, 'あ');
             
-            expect(suggestion).toBe('画面に文字を書いてみましょう');
+            expect(suggestion).toContain('画面に');
         });
 
         test('should provide stroke count feedback', () => {
@@ -325,18 +379,18 @@ describe('ScoreService', () => {
                     expectedStrokes: 3 
                 } 
             };
-            const suggestion = scoreService.getSuggestion(score, {}, 'あ');
+            const suggestion = scoreService.getConstructiveSuggestion(score, {}, 'あ');
             
-            expect(suggestion).toContain('ストローク');
+            expect(suggestion).toContain('線');
         });
     });
 
-    describe('getIcon', () => {
+    describe('getEncouragingIcon', () => {
         test('should return correct icons for each level', () => {
-            expect(scoreService.getIcon('excellent')).toBe('😊');
-            expect(scoreService.getIcon('fair')).toBe('🙂');
-            expect(scoreService.getIcon('poor')).toBe('😐');
-            expect(scoreService.getIcon('unknown')).toBe('🙂');
+            expect(scoreService.getEncouragingIcon('excellent')).toBe('🌟');
+            expect(scoreService.getEncouragingIcon('fair')).toBe('😊');
+            expect(scoreService.getEncouragingIcon('poor')).toBe('🙂');
+            expect(scoreService.getEncouragingIcon('unknown')).toBe('🙂');
         });
     });
 
@@ -461,6 +515,97 @@ describe('ScoreService', () => {
                 expect(score.level).toBeDefined();
                 expect(feedback.message).toBeDefined();
                 console.log(`${scenario.name}: ${score.level} (${score.score.toFixed(2)})`);
+            });
+        });
+    });
+
+    describe('encouraging scoring system requirements', () => {
+        test('should guarantee minimum fair level for any drawing attempt (requirement 1.4)', () => {
+            const poorDrawingData = {
+                strokes: [[{ x: 10, y: 10 }]], // 最小限の描画
+                boundingBox: { x: 10, y: 10, width: 1, height: 1 }
+            };
+            const failedRecognition = { recognized: false };
+            
+            const score = scoreService.calculateScore(failedRecognition, 'あ', poorDrawingData);
+            
+            expect(score.level).toBe('fair'); // 描画があれば最低fair
+            expect(score.score).toBeGreaterThan(0);
+        });
+
+        test('should provide constructive feedback even for complete failures (requirement 1.6)', () => {
+            const noDrawingData = { strokes: [] };
+            const noRecognition = { recognized: false };
+            
+            const score = scoreService.calculateScore(noRecognition, 'あ', noDrawingData);
+            const feedback = scoreService.generateFeedback(score, noRecognition, 'あ');
+            
+            expect(feedback.alwaysPositive).toBe(true);
+            expect(feedback.encouragingNote).toBeDefined();
+            expect(feedback.suggestion).toContain('だいじょうぶ');
+        });
+
+        test('should prioritize encouragement over accuracy (requirement 1.3)', () => {
+            const inaccurateDrawing = {
+                strokes: [
+                    [{ x: 5, y: 5 }], // 不正確な描画
+                    [{ x: 10, y: 10 }],
+                    [{ x: 15, y: 15 }],
+                    [{ x: 20, y: 20 }],
+                    [{ x: 25, y: 25 }] // 多すぎるストローク
+                ],
+                boundingBox: { x: 5, y: 5, width: 20, height: 20 }
+            };
+            const lowConfidenceRecognition = {
+                recognized: true,
+                confidence: 0.3, // 低い信頼度
+                details: { similarity: 0.3, expectedStrokes: 3 }
+            };
+            
+            const score = scoreService.calculateScore(lowConfidenceRecognition, 'あ', inaccurateDrawing);
+            const feedback = scoreService.generateFeedback(score, lowConfidenceRecognition, 'あ');
+            
+            expect(score.level).toBe('fair'); // 精度が低くても励ましを優先
+            expect(feedback.alwaysPositive).toBe(true);
+            expect(feedback.encouragingNote).toBeDefined();
+        });
+
+        test('should provide positive feedback for reasonable attempts (requirement 1.5)', () => {
+            const reasonableDrawing = {
+                strokes: [
+                    [{ x: 20, y: 20 }, { x: 60, y: 25 }], // 少し不正確
+                    [{ x: 40, y: 15 }, { x: 45, y: 70 }],
+                    [{ x: 25, y: 50 }, { x: 55, y: 55 }]
+                ],
+                boundingBox: { x: 20, y: 15, width: 40, height: 55 }
+            };
+            const moderateRecognition = {
+                recognized: true,
+                confidence: 0.4,
+                details: { similarity: 0.4, expectedStrokes: 3 }
+            };
+            
+            const score = scoreService.calculateScore(moderateRecognition, 'あ', reasonableDrawing);
+            
+            expect(score.level).not.toBe('poor'); // 合理的な試行は「良い」レベル以上
+            expect(score.score).toBeGreaterThan(0.3);
+        });
+
+        test('should always provide encouraging notes and constructive suggestions', () => {
+            const testCases = [
+                { level: 'excellent', confidence: 0.9 },
+                { level: 'fair', confidence: 0.5 },
+                { level: 'poor', confidence: 0.1 }
+            ];
+
+            testCases.forEach(testCase => {
+                const score = { level: testCase.level, confidence: testCase.confidence };
+                const feedback = scoreService.generateFeedback(score, {}, 'あ');
+                
+                expect(feedback.encouragingNote).toBeDefined();
+                expect(feedback.suggestion).toBeDefined();
+                expect(feedback.alwaysPositive).toBe(true);
+                expect(feedback.suggestion.length).toBeGreaterThan(0);
             });
         });
     });

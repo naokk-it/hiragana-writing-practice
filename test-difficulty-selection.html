@@ -3,41 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>難易度選択機能テスト</title>
+    <title>新しい難易度選択UIテスト</title>
     <link rel="stylesheet" href="styles/main.css">
 </head>
 <body>
     <div id="app">
         <div id="main-menu" class="screen active">
-            <!-- MainMenuComponent will render here -->
-        </div>
-        <div id="practice-view" class="screen">
-            <div class="practice-content">
-                <h2>練習画面</h2>
-                <p>難易度別練習が開始されました</p>
-                <div id="current-character" style="font-size: 4rem; text-align: center; margin: 20px;">あ</div>
-                <button onclick="backToMenu()" class="back-button">メニューに戻る</button>
-            </div>
+            <!-- MainMenuComponentがここに内容を生成します -->
         </div>
     </div>
 
     <script type="module">
-        import { App } from './js/app.js';
-        
-        // アプリケーションを初期化
-        const app = new App();
-        
-        // テスト用のグローバル関数
-        window.backToMenu = function() {
-            app.showScreen('main-menu');
+        import { MainMenuComponent } from './js/components/MainMenuComponent.js';
+        import { HiraganaDataService } from './js/services/HiraganaDataService.js';
+        import { ProgressTrackingService } from './js/services/ProgressTrackingService.js';
+
+        // モックアプリオブジェクト
+        const mockApp = {
+            startPractice: (mode, options) => {
+                console.log('練習開始:', mode, options);
+                alert(`練習開始: ${mode}, オプション: ${JSON.stringify(options)}`);
+            },
+            showProgress: () => {
+                console.log('進捗表示');
+                alert('進捗表示');
+            },
+            getProgressTrackingService: () => {
+                return new ProgressTrackingService();
+            }
         };
-        
-        // アプリケーションを開始
-        app.init().then(() => {
-            console.log('難易度選択機能テストアプリが開始されました');
-        }).catch(error => {
-            console.error('アプリケーション初期化エラー:', error);
-        });
+
+        // コンポーネントを初期化
+        const mainMenu = new MainMenuComponent(mockApp);
+        mainMenu.init();
+
+        console.log('新しい難易度選択UIテスト準備完了');
     </script>
 </body>
 </html>

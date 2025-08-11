@@ -1110,6 +1110,52 @@ body {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
+/* 新しい3段階難易度システム用スタイル */
+.difficulty-beginner {
+    border-color: #4CAF50;
+    background: linear-gradient(135deg, #E8F5E8, #F1F8E9);
+}
+
+.difficulty-beginner:hover {
+    background: linear-gradient(135deg, #C8E6C9, #DCEDC8);
+    border-color: #388E3C;
+}
+
+.difficulty-intermediate {
+    border-color: #2196F3;
+    background: linear-gradient(135deg, #E3F2FD, #E8F4FD);
+}
+
+.difficulty-intermediate:hover {
+    background: linear-gradient(135deg, #BBDEFB, #C3E8FF);
+    border-color: #1976D2;
+}
+
+.difficulty-advanced {
+    border-color: #FF9800;
+    background: linear-gradient(135deg, #FFF3E0, #FFF8E1);
+}
+
+.difficulty-advanced:hover {
+    background: linear-gradient(135deg, #FFE0B2, #FFECB3);
+    border-color: #F57C00;
+}
+
+/* 文字プレビュー表示 */
+.character-preview {
+    font-size: 1.1rem;
+    color: #555;
+    margin: 8px 0;
+    font-family: 'Hiragino Sans', 'Yu Gothic', 'Meiryo', 'MS Gothic', monospace;
+    line-height: 1.4;
+    text-align: center;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* 旧システムとの互換性維持 */
 .difficulty-1 {
     border-color: #4CAF50;
     background: linear-gradient(135deg, #E8F5E8, #F1F8E9);

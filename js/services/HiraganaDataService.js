@@ -15,6 +15,7 @@ export class HiraganaDataService {
         this.difficultyCache = new Map();
         this.categoryCache = new Map();
         this.characterLookupCache = new Map();
+        this.strokeComplexityCache = new Map();
         
         try {
             this.characters = this.initializeCharacters();
@@ -266,7 +267,18 @@ export class HiraganaDataService {
             this.characterLookupCache.set(char.character, { char, index });
         });
 
+        // 新しい画数複雑度レベル別キャッシュを追加
+        this.strokeComplexityCache = new Map();
+        this.characters.forEach(char => {
+            const level = char.getStrokeComplexityLevel ? char.getStrokeComplexityLevel() : 'beginner';
+            if (!this.strokeComplexityCache.has(level)) {
+                this.strokeComplexityCache.set(level, []);
+            }
+            this.strokeComplexityCache.get(level).push(char);
+        });
+
         console.log('HiraganaDataService キャッシュ構築完了');
+        console.log(`画数複雑度キャッシュ: ${Array.from(this.strokeComplexityCache.keys()).join(', ')}`);
     }
 
     /**
@@ -583,6 +595,7 @@ export class HiraganaDataService {
             difficultyCache: this.difficultyCache.size,
             categoryCache: this.categoryCache.size,
             lookupCache: this.characterLookupCache.size,
+            strokeComplexityCache: this.strokeComplexityCache.size,
             isInitialized: this.isInitialized
         };
     }
@@ -594,6 +607,7 @@ export class HiraganaDataService {
         this.difficultyCache.clear();
         this.categoryCache.clear();
         this.characterLookupCache.clear();
+        this.strokeComplexityCache.clear();
         
         this.buildCaches();
         console.log('HiraganaDataService キャッシュを再構築しました');
@@ -607,6 +621,267 @@ export class HiraganaDataService {
         if (this.difficultyCache.size > 10) {
             console.log('HiraganaDataService メモリクリーンアップを実行');
             // 基本的なキャッシュは保持
+        }
+    }
+
+    // ========== 新しい画数・複雑さベースの難易度分類システム ==========
+
+    /**
+     * 画数・複雑さに基づく難易度レベルで文字を取得
+     * @param {string} level 難易度レベル ('beginner', 'intermediate', 'advanced')
+     * @returns {Array<HiraganaCharacter>} 指定レベルの文字配列
+     */
+    getCharactersByStrokeComplexity(level) {
+        try {
+            if (!this.isInitialized || this.characters.length === 0) {
+                console.warn('文字データが初期化されていません');
+                return [];
+            }
+
+            const validLevels = ['beginner', 'intermediate', 'advanced'];
+            if (!validLevels.includes(level)) {
+                console.error(`無効な難易度レベル: ${level}`);
+                return [];
+            }
+
+            // キャッシュから高速取得
+            const cachedCharacters = this.strokeComplexityCache.get(level) || [];
+            console.log(`${level}レベルの文字数: ${cachedCharacters.length}`);
+            return [...cachedCharacters]; // 配列のコピーを返す
+
+        } catch (error) {
+            console.error('画数複雑度による文字取得エラー:', error);
+            if (this.errorHandler) {
+                this.errorHandler.logCharacterSelectionDebug('stroke_complexity_filter_error', {
+                    level,
+                    error: error.message
+                });
+            }
+            return [];
+        }
+    }
+
+    /**
+     * 教育的順序で文字を取得
+     * @param {string} level 難易度レベル ('beginner', 'intermediate', 'advanced')
+     * @returns {Array<HiraganaCharacter>} 教育的順序でソートされた文字配列
+     */
+    getCharactersInPedagogicalOrder(level) {
+        try {
+            const characters = this.getCharactersByStrokeComplexity(level);
+            
+            // 教育的順序でソート
+            const sortedCharacters = characters.sort((a, b) => {
+                const orderA = a.getPedagogicalOrder ? a.getPedagogicalOrder() : a.strokeCount * 100;
+                const orderB = b.getPedagogicalOrder ? b.getPedagogicalOrder() : b.strokeCount * 100;
+                return orderA - orderB;
+            });
+
+            console.log(`${level}レベルの教育的順序: ${sortedCharacters.map(c => c.character).join(', ')}`);
+            return sortedCharacters;
+
+        } catch (error) {
+            console.error('教育的順序取得エラー:', error);
+            if (this.errorHandler) {
+                this.errorHandler.logCharacterSelectionDebug('pedagogical_order_error', {
+                    level,
+                    error: error.message
+                });
+            }
+            return [];
+        }
+    }
+
+    /**
+     * 指定文字の複雑さスコアを計算
+     * @param {string} character 文字
+     * @returns {number} 複雑さスコア（0.0-1.0）
+     */
+    calculateComplexityScore(character) {
+        try {
+            const cached = this.characterLookupCache.get(character);
+            if (cached && cached.char.getComplexityScore) {
+                return cached.char.getComplexityScore();
+            }
+
+            console.warn(`文字「${character}」が見つかりません`);
+            return 0.0;
+
+        } catch (error) {
+            console.error('複雑さスコア計算エラー:', error);
+            if (this.errorHandler) {
+                this.errorHandler.logCharacterSelectionDebug('complexity_calculation_error', {
+                    character,
+                    error: error.message
+                });
+            }
+            return 0.0;
+        }
+    }
+
+    /**
+     * 画数複雑度レベル別の文字数を取得
+     * @returns {Object} レベル別文字数のオブジェクト
+     */
+    getCharacterCountByStrokeComplexity() {
+        try {
+            const counts = {
+                beginner: 0,
+                intermediate: 0,
+                advanced: 0
+            };
+
+            this.characters.forEach(char => {
+                const level = char.getStrokeComplexityLevel ? char.getStrokeComplexityLevel() : 'beginner';
+                if (counts.hasOwnProperty(level)) {
+                    counts[level]++;
+                }
+            });
+
+            return counts;
+
+        } catch (error) {
+            console.error('画数複雑度別文字数取得エラー:', error);
+            return { beginner: 0, intermediate: 0, advanced: 0 };
+        }
+    }
+
+    /**
+     * 画数別の詳細統計を取得
+     * @returns {Object} 画数別統計情報
+     */
+    getStrokeCountStatistics() {
+        try {
+            const stats = {};
+
+            this.characters.forEach(char => {
+                const strokeCount = char.strokeCount;
+                if (!stats[strokeCount]) {
+                    stats[strokeCount] = {
+                        count: 0,
+                        characters: [],
+                        averageComplexity: 0,
+                        level: char.getStrokeComplexityLevel ? char.getStrokeComplexityLevel() : 'unknown'
+                    };
+                }
+
+                stats[strokeCount].count++;
+                stats[strokeCount].characters.push(char.character);
+                
+                const complexity = char.getComplexityScore ? char.getComplexityScore() : 0;
+                stats[strokeCount].averageComplexity = 
+                    (stats[strokeCount].averageComplexity * (stats[strokeCount].count - 1) + complexity) / stats[strokeCount].count;
+            });
+
+            return stats;
+
+        } catch (error) {
+            console.error('画数統計取得エラー:', error);
+            return {};
+        }
+    }
+
+    /**
+     * 新しい難易度システムの概要を取得
+     * @returns {Object} 難易度システム概要
+     */
+    getStrokeComplexitySystemOverview() {
+        try {
+            const overview = {
+                beginner: {
+                    name: 'はじめて',
+                    description: '1-2画の簡単な文字',
+                    strokeRange: '1-2画',
+                    characters: [],
+                    count: 0
+                },
+                intermediate: {
+                    name: 'なれてきた', 
+                    description: '3画の文字',
+                    strokeRange: '3画',
+                    characters: [],
+                    count: 0
+                },
+                advanced: {
+                    name: 'じょうず',
+                    description: '4画以上の複雑な文字',
+                    strokeRange: '4画以上',
+                    characters: [],
+                    count: 0
+                }
+            };
+
+            // 各レベルの文字を取得
+            Object.keys(overview).forEach(level => {
+                const characters = this.getCharactersInPedagogicalOrder(level);
+                overview[level].characters = characters.map(char => char.character);
+                overview[level].count = characters.length;
+            });
+
+            return overview;
+
+        } catch (error) {
+            console.error('難易度システム概要取得エラー:', error);
+            return {};
+        }
+    }
+
+    /**
+     * 指定レベルの次の推奨文字を取得
+     * @param {string} level 難易度レベル
+     * @param {string} currentCharacter 現在の文字（除外用）
+     * @returns {HiraganaCharacter|null} 次の推奨文字
+     */
+    getNextRecommendedCharacter(level, currentCharacter = null) {
+        try {
+            const characters = this.getCharactersInPedagogicalOrder(level);
+            
+            if (characters.length === 0) {
+                return null;
+            }
+
+            // 現在の文字の次を取得
+            if (currentCharacter) {
+                const currentIndex = characters.findIndex(char => char.character === currentCharacter);
+                if (currentIndex !== -1 && currentIndex < characters.length - 1) {
+                    return characters[currentIndex + 1];
+                }
+            }
+
+            // 最初の文字を返す
+            return characters[0];
+
+        } catch (error) {
+            console.error('次の推奨文字取得エラー:', error);
+            return null;
+        }
+    }
+
+    /**
+     * レベル内でのランダム文字を取得
+     * @param {string} level 難易度レベル
+     * @param {string} excludeCharacter 除外する文字
+     * @returns {HiraganaCharacter|null} ランダム文字
+     */
+    getRandomCharacterFromLevel(level, excludeCharacter = null) {
+        try {
+            let characters = this.getCharactersByStrokeComplexity(level);
+            
+            // 除外文字がある場合はフィルタリング
+            if (excludeCharacter && characters.length > 1) {
+                characters = characters.filter(char => char.character !== excludeCharacter);
+            }
+
+            if (characters.length === 0) {
+                return null;
+            }
+
+            const randomIndex = Math.floor(Math.random() * characters.length);
+            return characters[randomIndex];
+
+        } catch (error) {
+            console.error('レベル内ランダム文字取得エラー:', error);
+            return null;
         }
     }
 }

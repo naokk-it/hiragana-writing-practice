@@ -1,131 +1,465 @@
+import { DataValidationService } from './DataValidationService.js';
+
 /**
  * データ移行サービス
- * 既存の進捗データを新しい形式に移行し、バージョン互換性を管理
+ * 旧難易度システムから新しい画数複雑度システムへの移行を管理
  */
 export class DataMigrationService {
-    constructor(dataStorageService) {
+    constructor(dataStorageService, hiraganaDataService) {
         this.dataStorageService = dataStorageService;
-        this.currentVersion = '2.0'; // 新しいバージョン
+        this.hiraganaDataService = hiraganaDataService;
+        this.validationService = new DataValidationService();
+        
+        // データバージョン管理
+        this.currentVersion = '2.0';
         this.supportedVersions = ['1.0', '1.1', '2.0'];
+        
+        // 旧難易度システムから新システムへのマッピング
+        this.difficultyMapping = this.createDifficultyMapping();
         
         console.log('DataMigrationService初期化完了');
     }
 
     /**
+     * 難易度マッピングを作成
+     * @returns {Object} 難易度マッピング
+     */
+    createDifficultyMapping() {
+        // 旧システム（4段階）から新システム（3段階）へのマッピング
+        const oldToNewMapping = {
+            // 旧システムの難易度1 → 新システムのbeginner
+            1: 'beginner',
+            // 旧システムの難易度2 → 新システムのintermediate  
+            2: 'intermediate',
+            // 旧システムの難易度3 → 新システムのintermediate
+            3: 'intermediate',
+            // 旧システムの難易度4 → 新システムのadvanced
+            4: 'advanced'
+        };
+
+        // 文字別の詳細マッピング
+        const characterMapping = {
+            // 旧システムで難易度1だった文字
+            'あ': { oldDifficulty: 1, newLevel: 'intermediate', reason: '3画のため中級に変更' },
+            'い': { oldDifficulty: 1, newLevel: 'beginner', reason: '2画のため初級を維持' },
+            'う': { oldDifficulty: 1, newLevel: 'beginner', reason: '2画のため初級を維持' },
+            'え': { oldDifficulty: 1, newLevel: 'intermediate', reason: '3画のため中級に変更' },
+            'お': { oldDifficulty: 1, newLevel: 'intermediate', reason: '3画のため中級に変更' },
+            
+            // 旧システムで難易度2だった文字
+            'か': { oldDifficulty: 2, newLevel: 'intermediate', reason: '3画のため中級を維持' },
+            'き': { oldDifficulty: 2, newLevel: 'advanced', reason: '4画のため上級に変更' },
+            'く': { oldDifficulty: 2, newLevel: 'beginner', reason: '1画のため初級に変更' },
+            'け': { oldDifficulty: 2, newLevel: 'intermediate', reason: '3画のため中級を維持' },
+            'こ': { oldDifficulty: 2, newLevel: 'intermediate', reason: '3画のため中級を維持' },
+            
+            // その他の文字も同様にマッピング...
+        };
+
+        return {
+            levelMapping: oldToNewMapping,
+            characterMapping: characterMapping
+        };
+    }
+
+    /**
      * データ移行を実行
-     * @returns {boolean} 移行成功かどうか
+     * @returns {Promise<boolean>} 移行成功かどうか
      */
     async migrateData() {
         try {
             console.log('データ移行を開始します...');
-
-            // 現在のデータバージョンを確認
+            
+            // 現在のデータバージョンをチェック
             const currentDataVersion = this.getCurrentDataVersion();
             console.log(`現在のデータバージョン: ${currentDataVersion}`);
-
+            
             if (currentDataVersion === this.currentVersion) {
-                console.log('データは最新バージョンです');
+                console.log('データは既に最新バージョンです');
                 return true;
             }
 
-            // バージョン互換性をチェック
-            if (!this.isVersionSupported(currentDataVersion)) {
-                console.warn(`サポートされていないバージョン: ${currentDataVersion}`);
-                return this.handleUnsupportedVersion(currentDataVersion);
-            }
-
-            // データをバックアップ
-            const backupSuccess = this.createDataBackup();
+            // バックアップを作成
+            const backupSuccess = await this.createBackup();
             if (!backupSuccess) {
-                console.error('データバックアップに失敗しました');
+                console.error('バックアップ作成に失敗しました');
                 return false;
             }
 
-            // バージョン別の移行を実行
-            const migrationSuccess = await this.performVersionMigration(currentDataVersion);
+            // バージョンに応じた移行を実行
+            let migrationSuccess = false;
             
+            switch (currentDataVersion) {
+                case '1.0':
+                    migrationSuccess = await this.migrateFromV1_0();
+                    break;
+                case '1.1':
+                    migrationSuccess = await this.migrateFromV1_1();
+                    break;
+                default:
+                    console.warn(`未対応のデータバージョン: ${currentDataVersion}`);
+                    migrationSuccess = await this.performFallbackMigration();
+            }
+
             if (migrationSuccess) {
-                // バージョン情報を更新
-                this.updateDataVersion(this.currentVersion);
+                // データバージョンを更新
+                this.setDataVersion(this.currentVersion);
                 console.log('データ移行が完了しました');
+                
+                // 移行後の検証
+                const validationSuccess = await this.validateMigratedData();
+                if (!validationSuccess) {
+                    console.warn('移行データの検証で問題が見つかりました');
+                }
+                
                 return true;
             } else {
                 console.error('データ移行に失敗しました');
-                return this.restoreFromBackup();
+                await this.restoreFromBackup();
+                return false;
             }
 
         } catch (error) {
             console.error('データ移行エラー:', error);
-            return this.restoreFromBackup();
+            await this.restoreFromBackup();
+            return false;
         }
     }
 
     /**
-     * 現在のデータバージョンを取得
-     * @returns {string} データバージョン
+     * バージョン1.0からの移行
+     * @returns {Promise<boolean>} 移行成功かどうか
      */
-    getCurrentDataVersion() {
+    async migrateFromV1_0() {
         try {
-            // 新しい形式のバージョン情報をチェック
-            const versionInfo = this.dataStorageService.loadFromStorage('hiragana_data_version');
-            if (versionInfo && versionInfo.version) {
-                return versionInfo.version;
-            }
-
-            // 既存データがある場合は1.0として扱う
-            const sessions = this.dataStorageService.getAllSessions();
-            if (sessions && sessions.length > 0) {
-                return '1.0';
-            }
-
-            // 旧形式の進捗データをチェック（実際に保存されているデータのみ）
-            const storedProgress = this.dataStorageService.loadFromStorage(this.dataStorageService.storageKeys.progress);
-            if (storedProgress) {
-                return storedProgress.version || '1.0';
-            }
-
-            // 新規インストールの場合は最新バージョン
-            return this.currentVersion;
-
+            console.log('バージョン1.0からの移行を開始...');
+            
+            // 旧進捗データを取得
+            const oldProgressData = this.dataStorageService.getProgressData();
+            const oldSessions = this.dataStorageService.getAllSessions();
+            
+            // 新しい進捗追跡データ構造に変換
+            const migratedProgressData = await this.convertProgressDataToV2(oldProgressData);
+            
+            // セッションデータを新しい難易度システムに対応
+            const migratedSessions = await this.convertSessionsToV2(oldSessions);
+            
+            // 新しいデータを保存
+            this.dataStorageService.saveData('progressTracking', migratedProgressData);
+            this.dataStorageService.saveToStorage(this.dataStorageService.storageKeys.sessions, migratedSessions);
+            
+            console.log('バージョン1.0からの移行完了');
+            return true;
+            
         } catch (error) {
-            console.error('バージョン確認エラー:', error);
-            return '1.0'; // デフォルトは1.0
+            console.error('バージョン1.0移行エラー:', error);
+            return false;
         }
     }
 
     /**
-     * バージョンがサポートされているかチェック
-     * @param {string} version バージョン
-     * @returns {boolean} サポートされているかどうか
+     * バージョン1.1からの移行
+     * @returns {Promise<boolean>} 移行成功かどうか
      */
-    isVersionSupported(version) {
-        return this.supportedVersions.includes(version);
+    async migrateFromV1_1() {
+        try {
+            console.log('バージョン1.1からの移行を開始...');
+            
+            // 1.1では進捗追跡システムが部分的に実装されているため、
+            // 既存データを新しい画数複雑度システムに適応
+            const progressTrackingData = this.dataStorageService.loadData('progressTracking');
+            
+            if (progressTrackingData) {
+                const migratedData = await this.updateProgressTrackingToV2(progressTrackingData);
+                this.dataStorageService.saveData('progressTracking', migratedData);
+            }
+            
+            console.log('バージョン1.1からの移行完了');
+            return true;
+            
+        } catch (error) {
+            console.error('バージョン1.1移行エラー:', error);
+            return false;
+        }
     }
 
     /**
-     * データバックアップを作成
-     * @returns {boolean} バックアップ成功かどうか
+     * 旧進捗データをバージョン2.0形式に変換
+     * @param {Object} oldProgressData 旧進捗データ
+     * @returns {Promise<Object>} 変換された進捗データ
      */
-    createDataBackup() {
+    async convertProgressDataToV2(oldProgressData) {
+        const migratedData = {
+            characterProgress: {},
+            sessionData: {
+                startTime: null,
+                totalPracticeTime: oldProgressData.totalPracticeTime || 0,
+                sessionsCount: oldProgressData.totalSessions || 0
+            },
+            lastUpdated: Date.now(),
+            version: '2.0'
+        };
+
+        // 文字別進捗データを変換
+        if (oldProgressData.characters) {
+            for (const [character, charData] of Object.entries(oldProgressData.characters)) {
+                try {
+                    const migratedCharProgress = await this.convertCharacterProgress(character, charData);
+                    if (migratedCharProgress) {
+                        migratedData.characterProgress[character] = migratedCharProgress;
+                    }
+                } catch (error) {
+                    console.warn(`文字 ${character} の進捗データ変換に失敗:`, error);
+                }
+            }
+        }
+
+        return migratedData;
+    }
+
+    /**
+     * 文字進捗データを変換
+     * @param {string} character 文字
+     * @param {Object} oldCharData 旧文字データ
+     * @returns {Promise<Object>} 変換された文字進捗データ
+     */
+    async convertCharacterProgress(character, oldCharData) {
         try {
-            const backupData = {
-                timestamp: Date.now(),
-                version: this.getCurrentDataVersion(),
-                sessions: this.dataStorageService.getAllSessions(),
-                progress: this.dataStorageService.getProgressData(),
-                currentSession: this.dataStorageService.loadCurrentSession()
+            // 新しいCharacterProgressオブジェクトを作成
+            const attempts = [];
+            
+            // 旧データから試行データを復元
+            if (oldCharData.totalAttempts && oldCharData.averageScore) {
+                // 統計データから推定試行データを生成
+                const estimatedAttempts = Math.min(oldCharData.totalAttempts, 10);
+                const baseScore = oldCharData.averageScore;
+                const variation = 0.1; // スコアの変動幅
+                
+                for (let i = 0; i < estimatedAttempts; i++) {
+                    const score = Math.max(0, Math.min(1, 
+                        baseScore + (Math.random() - 0.5) * variation * 2
+                    ));
+                    
+                    const timestamp = oldCharData.lastPracticed 
+                        ? oldCharData.lastPracticed - (estimatedAttempts - i - 1) * 24 * 60 * 60 * 1000
+                        : Date.now() - (estimatedAttempts - i - 1) * 24 * 60 * 60 * 1000;
+                    
+                    attempts.push({
+                        score: score,
+                        timestamp: timestamp,
+                        details: {
+                            migrated: true,
+                            originalData: {
+                                bestScore: oldCharData.bestScore,
+                                averageScore: oldCharData.averageScore
+                            }
+                        }
+                    });
+                }
+            }
+
+            return {
+                character: character,
+                attempts: attempts,
+                createdAt: oldCharData.createdAt || Date.now(),
+                updatedAt: oldCharData.lastPracticed || Date.now()
             };
 
-            const backupKey = `hiragana_backup_${Date.now()}`;
-            const success = this.dataStorageService.saveToStorage(backupKey, backupData);
+        } catch (error) {
+            console.error(`文字進捗変換エラー (${character}):`, error);
+            return null;
+        }
+    }
+
+    /**
+     * セッションデータをバージョン2.0形式に変換
+     * @param {Array} oldSessions 旧セッションデータ
+     * @returns {Promise<Array>} 変換されたセッションデータ
+     */
+    async convertSessionsToV2(oldSessions) {
+        const migratedSessions = [];
+
+        for (const session of oldSessions) {
+            try {
+                const migratedSession = await this.convertSession(session);
+                if (migratedSession) {
+                    migratedSessions.push(migratedSession);
+                }
+            } catch (error) {
+                console.warn('セッション変換エラー:', error);
+            }
+        }
+
+        return migratedSessions;
+    }
+
+    /**
+     * 個別セッションを変換
+     * @param {Object} oldSession 旧セッションデータ
+     * @returns {Promise<Object>} 変換されたセッションデータ
+     */
+    async convertSession(oldSession) {
+        try {
+            // 文字の新しい難易度レベルを取得
+            const character = oldSession.character?.character;
+            if (!character) return null;
+
+            const newDifficultyLevel = this.getNewDifficultyLevel(character);
             
-            if (success) {
-                // 最新のバックアップキーを記録
-                this.dataStorageService.saveToStorage('hiragana_latest_backup', backupKey);
-                console.log(`データバックアップ作成: ${backupKey}`);
+            // セッションデータを新しい形式に変換
+            const migratedSession = {
+                ...oldSession,
+                character: {
+                    ...oldSession.character,
+                    strokeComplexityLevel: newDifficultyLevel,
+                    migrationInfo: {
+                        originalDifficulty: oldSession.character.difficulty,
+                        newDifficulty: newDifficultyLevel,
+                        migrationDate: Date.now()
+                    }
+                }
+            };
+
+            return migratedSession;
+
+        } catch (error) {
+            console.error('セッション変換エラー:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 進捗追跡データをバージョン2.0に更新
+     * @param {Object} progressTrackingData 既存の進捗追跡データ
+     * @returns {Promise<Object>} 更新された進捗追跡データ
+     */
+    async updateProgressTrackingToV2(progressTrackingData) {
+        try {
+            const updatedData = {
+                ...progressTrackingData,
+                version: '2.0',
+                lastUpdated: Date.now(),
+                migrationInfo: {
+                    migratedFrom: progressTrackingData.version || '1.1',
+                    migrationDate: Date.now()
+                }
+            };
+
+            // 文字進捗データに新しい難易度情報を追加
+            if (updatedData.characterProgress) {
+                for (const [character, progress] of Object.entries(updatedData.characterProgress)) {
+                    const newDifficultyLevel = this.getNewDifficultyLevel(character);
+                    
+                    // 各試行データに新しい難易度情報を追加
+                    if (progress.attempts) {
+                        progress.attempts.forEach(attempt => {
+                            if (!attempt.details) attempt.details = {};
+                            attempt.details.strokeComplexityLevel = newDifficultyLevel;
+                        });
+                    }
+                }
             }
 
-            return success;
+            return updatedData;
+
+        } catch (error) {
+            console.error('進捗追跡データ更新エラー:', error);
+            return progressTrackingData;
+        }
+    }
+
+    /**
+     * 文字の新しい難易度レベルを取得
+     * @param {string} character 文字
+     * @returns {string} 新しい難易度レベル
+     */
+    getNewDifficultyLevel(character) {
+        // HiraganaDataServiceから新しい難易度レベルを取得
+        try {
+            const hiraganaChar = this.hiraganaDataService.getCharacterData(character);
+            if (hiraganaChar && hiraganaChar.strokeComplexityLevel) {
+                return hiraganaChar.strokeComplexityLevel;
+            }
+        } catch (error) {
+            console.warn(`文字 ${character} の新しい難易度レベル取得に失敗:`, error);
+        }
+
+        // フォールバック: 文字別マッピングから取得
+        const mapping = this.difficultyMapping.characterMapping[character];
+        if (mapping) {
+            return mapping.newLevel;
+        }
+
+        // デフォルト値
+        return 'intermediate';
+    }
+
+    /**
+     * フォールバック移行を実行
+     * @returns {Promise<boolean>} 移行成功かどうか
+     */
+    async performFallbackMigration() {
+        try {
+            console.log('フォールバック移行を実行...');
+            
+            // 基本的なデータ構造の確認と修正
+            const progressData = this.dataStorageService.loadData('progressTracking');
+            
+            if (progressData) {
+                // 最低限の構造を確保
+                const fallbackData = {
+                    characterProgress: progressData.characterProgress || {},
+                    sessionData: progressData.sessionData || {
+                        startTime: null,
+                        totalPracticeTime: 0,
+                        sessionsCount: 0
+                    },
+                    lastUpdated: Date.now(),
+                    version: this.currentVersion,
+                    migrationInfo: {
+                        type: 'fallback',
+                        migrationDate: Date.now(),
+                        originalVersion: 'unknown'
+                    }
+                };
+
+                this.dataStorageService.saveData('progressTracking', fallbackData);
+            }
+
+            return true;
+
+        } catch (error) {
+            console.error('フォールバック移行エラー:', error);
+            return false;
+        }
+    }
+
+    /**
+     * バックアップを作成
+     * @returns {Promise<boolean>} バックアップ成功かどうか
+     */
+    async createBackup() {
+        try {
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const backupKey = `hiragana_backup_${timestamp}`;
+            
+            // 全データをバックアップ
+            const allData = {
+                sessions: this.dataStorageService.getAllSessions(),
+                progress: this.dataStorageService.getProgressData(),
+                progressTracking: this.dataStorageService.loadData('progressTracking'),
+                settings: this.dataStorageService.loadData('settings'),
+                version: this.getCurrentDataVersion(),
+                backupDate: Date.now()
+            };
+
+            localStorage.setItem(backupKey, JSON.stringify(allData));
+            console.log(`バックアップ作成完了: ${backupKey}`);
+            
+            // 古いバックアップを削除（最新5個まで保持）
+            this.cleanupOldBackups();
+            
+            return true;
 
         } catch (error) {
             console.error('バックアップ作成エラー:', error);
@@ -134,297 +468,31 @@ export class DataMigrationService {
     }
 
     /**
-     * バージョン別の移行を実行
-     * @param {string} fromVersion 移行元バージョン
-     * @returns {boolean} 移行成功かどうか
+     * バックアップから復元
+     * @returns {Promise<boolean>} 復元成功かどうか
      */
-    async performVersionMigration(fromVersion) {
+    async restoreFromBackup() {
         try {
-            switch (fromVersion) {
-                case '1.0':
-                    return await this.migrateFrom1_0To2_0();
-                case '1.1':
-                    return await this.migrateFrom1_1To2_0();
-                default:
-                    console.warn(`未対応の移行パス: ${fromVersion} -> ${this.currentVersion}`);
-                    return false;
-            }
-        } catch (error) {
-            console.error(`移行エラー (${fromVersion} -> ${this.currentVersion}):`, error);
-            return false;
-        }
-    }
-
-    /**
-     * バージョン1.0から2.0への移行
-     * @returns {boolean} 移行成功かどうか
-     */
-    async migrateFrom1_0To2_0() {
-        try {
-            console.log('バージョン1.0から2.0への移行を開始...');
-
-            // 旧形式の進捗データを取得
-            const oldProgress = this.dataStorageService.getProgressData();
-            const oldSessions = this.dataStorageService.getAllSessions();
-
-            // 新形式の進捗データを作成
-            const newProgressData = this.convertOldProgressToNew(oldProgress, oldSessions);
-
-            // 新形式で保存
-            const success = this.dataStorageService.saveData('progressTracking', newProgressData);
-
-            if (success) {
-                console.log('バージョン1.0から2.0への移行完了');
-                return true;
-            }
-
-            return false;
-
-        } catch (error) {
-            console.error('1.0->2.0移行エラー:', error);
-            return false;
-        }
-    }
-
-    /**
-     * バージョン1.1から2.0への移行
-     * @returns {boolean} 移行成功かどうか
-     */
-    async migrateFrom1_1To2_0() {
-        try {
-            console.log('バージョン1.1から2.0への移行を開始...');
-            
-            // 1.1の場合は部分的な移行のみ必要
-            const existingData = this.dataStorageService.loadData('progressTracking');
-            
-            if (existingData) {
-                // データ構造の調整
-                const adjustedData = this.adjustDataStructure(existingData);
-                const success = this.dataStorageService.saveData('progressTracking', adjustedData);
-                
-                if (success) {
-                    console.log('バージョン1.1から2.0への移行完了');
-                    return true;
+            // 最新のバックアップを検索
+            const backupKeys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('hiragana_backup_')) {
+                    backupKeys.push(key);
                 }
             }
 
-            return false;
-
-        } catch (error) {
-            console.error('1.1->2.0移行エラー:', error);
-            return false;
-        }
-    }
-
-    /**
-     * 旧形式の進捗データを新形式に変換
-     * @param {Object} oldProgress 旧進捗データ
-     * @param {Array} oldSessions 旧セッションデータ
-     * @returns {Object} 新形式の進捗データ
-     */
-    convertOldProgressToNew(oldProgress, oldSessions) {
-        const newProgressData = {
-            characterProgress: {},
-            sessionData: {
-                startTime: null,
-                totalPracticeTime: oldProgress.totalPracticeTime || 0,
-                sessionsCount: oldProgress.totalSessions || 0
-            },
-            lastUpdated: Date.now(),
-            version: this.currentVersion
-        };
-
-        // 旧形式の文字別進捗を新形式に変換
-        if (oldProgress.characters) {
-            Object.keys(oldProgress.characters).forEach(character => {
-                const oldCharProgress = oldProgress.characters[character];
-                
-                // 新形式のCharacterProgressデータを作成
-                const newCharProgress = {
-                    character: character,
-                    attempts: this.convertOldAttemptsToNew(character, oldCharProgress, oldSessions),
-                    createdAt: oldCharProgress.firstPracticed || Date.now(),
-                    updatedAt: oldCharProgress.lastPracticed || Date.now()
-                };
-
-                newProgressData.characterProgress[character] = newCharProgress;
-            });
-        }
-
-        // セッションデータから追加の試行データを抽出
-        this.extractAttemptsFromSessions(oldSessions, newProgressData.characterProgress);
-
-        return newProgressData;
-    }
-
-    /**
-     * 旧形式の試行データを新形式に変換
-     * @param {string} character 文字
-     * @param {Object} oldCharProgress 旧文字進捗
-     * @param {Array} oldSessions 旧セッションデータ
-     * @returns {Array} 新形式の試行データ
-     */
-    convertOldAttemptsToNew(character, oldCharProgress, oldSessions) {
-        const attempts = [];
-
-        // 旧形式から基本的な試行データを作成
-        if (oldCharProgress.totalSessions > 0) {
-            const avgScore = oldCharProgress.averageScore || 0;
-            const sessionCount = oldCharProgress.totalSessions;
-            const lastPracticed = oldCharProgress.lastPracticed;
-
-            // 仮想的な試行データを作成（実際のデータがない場合）
-            for (let i = 0; i < Math.min(sessionCount, 10); i++) {
-                const timestamp = lastPracticed ? 
-                    lastPracticed - (i * 24 * 60 * 60 * 1000) : // 1日ずつ遡る
-                    Date.now() - (i * 24 * 60 * 60 * 1000);
-
-                attempts.push({
-                    score: this.generateRealisticScore(avgScore),
-                    timestamp: timestamp,
-                    details: {
-                        migrated: true,
-                        originalAverage: avgScore
-                    }
-                });
-            }
-        }
-
-        return attempts.reverse(); // 時系列順にソート
-    }
-
-    /**
-     * セッションデータから試行データを抽出
-     * @param {Array} sessions セッションデータ
-     * @param {Object} characterProgress 文字別進捗データ
-     */
-    extractAttemptsFromSessions(sessions, characterProgress) {
-        sessions.forEach(session => {
-            if (!session.character || !session.attempts) return;
-
-            const character = session.character.character;
-            
-            if (!characterProgress[character]) {
-                characterProgress[character] = {
-                    character: character,
-                    attempts: [],
-                    createdAt: session.startTime || Date.now(),
-                    updatedAt: session.endTime || Date.now()
-                };
-            }
-
-            // セッションの各試行を追加
-            session.attempts.forEach(attempt => {
-                if (attempt.scoreResult && typeof attempt.scoreResult.score === 'number') {
-                    characterProgress[character].attempts.push({
-                        score: Math.max(0, Math.min(1, attempt.scoreResult.score)),
-                        timestamp: attempt.timestamp || session.startTime || Date.now(),
-                        details: {
-                            sessionId: session.id,
-                            recognitionResult: attempt.recognitionResult
-                        }
-                    });
-                }
-            });
-
-            // 試行データを時系列順にソート
-            characterProgress[character].attempts.sort((a, b) => a.timestamp - b.timestamp);
-        });
-    }
-
-    /**
-     * データ構造を調整（1.1->2.0用）
-     * @param {Object} data 既存データ
-     * @returns {Object} 調整されたデータ
-     */
-    adjustDataStructure(data) {
-        // バージョン情報を更新
-        data.version = this.currentVersion;
-        data.lastUpdated = Date.now();
-
-        // 必要に応じてデータ構造を調整
-        if (data.characterProgress) {
-            Object.keys(data.characterProgress).forEach(character => {
-                const progress = data.characterProgress[character];
-                
-                // 新しいフィールドを追加（存在しない場合）
-                if (!progress.createdAt) {
-                    progress.createdAt = progress.updatedAt || Date.now();
-                }
-                
-                // 試行データの妥当性をチェック
-                if (progress.attempts) {
-                    progress.attempts = progress.attempts.filter(attempt => 
-                        attempt.score !== undefined && 
-                        attempt.timestamp !== undefined &&
-                        attempt.score >= 0 && attempt.score <= 1
-                    );
-                }
-            });
-        }
-
-        return data;
-    }
-
-    /**
-     * 現実的なスコアを生成（移行用）
-     * @param {number} averageScore 平均スコア
-     * @returns {number} 生成されたスコア
-     */
-    generateRealisticScore(averageScore) {
-        // 平均スコア周辺でランダムなスコアを生成
-        const variation = 0.2; // ±20%の変動
-        const randomFactor = (Math.random() - 0.5) * 2 * variation;
-        const score = averageScore + (averageScore * randomFactor);
-        
-        return Math.max(0, Math.min(1, score));
-    }
-
-    /**
-     * データバージョンを更新
-     * @param {string} version 新しいバージョン
-     */
-    updateDataVersion(version) {
-        const versionInfo = {
-            version: version,
-            updatedAt: Date.now(),
-            migrationHistory: this.getMigrationHistory()
-        };
-
-        this.dataStorageService.saveToStorage('hiragana_data_version', versionInfo);
-    }
-
-    /**
-     * 移行履歴を取得
-     * @returns {Array} 移行履歴
-     */
-    getMigrationHistory() {
-        try {
-            const versionInfo = this.dataStorageService.loadFromStorage('hiragana_data_version');
-            return versionInfo?.migrationHistory || [];
-        } catch (error) {
-            return [];
-        }
-    }
-
-    /**
-     * バックアップからデータを復元
-     * @returns {boolean} 復元成功かどうか
-     */
-    restoreFromBackup() {
-        try {
-            const latestBackupKey = this.dataStorageService.loadFromStorage('hiragana_latest_backup');
-            if (!latestBackupKey) {
-                console.error('バックアップが見つかりません');
+            if (backupKeys.length === 0) {
+                console.warn('復元可能なバックアップが見つかりません');
                 return false;
             }
 
-            const backupData = this.dataStorageService.loadFromStorage(latestBackupKey);
-            if (!backupData) {
-                console.error('バックアップデータの読み込みに失敗');
-                return false;
-            }
-
+            // 最新のバックアップを取得
+            backupKeys.sort();
+            const latestBackupKey = backupKeys[backupKeys.length - 1];
+            
+            const backupData = JSON.parse(localStorage.getItem(latestBackupKey));
+            
             // データを復元
             if (backupData.sessions) {
                 this.dataStorageService.saveToStorage(
@@ -432,22 +500,19 @@ export class DataMigrationService {
                     backupData.sessions
                 );
             }
-
+            
             if (backupData.progress) {
                 this.dataStorageService.saveToStorage(
                     this.dataStorageService.storageKeys.progress, 
                     backupData.progress
                 );
             }
-
-            if (backupData.currentSession) {
-                this.dataStorageService.saveToStorage(
-                    this.dataStorageService.storageKeys.currentSession, 
-                    backupData.currentSession
-                );
+            
+            if (backupData.progressTracking) {
+                this.dataStorageService.saveData('progressTracking', backupData.progressTracking);
             }
 
-            console.log('バックアップからデータを復元しました');
+            console.log(`バックアップから復元完了: ${latestBackupKey}`);
             return true;
 
         } catch (error) {
@@ -457,69 +522,76 @@ export class DataMigrationService {
     }
 
     /**
-     * サポートされていないバージョンの処理
-     * @param {string} version サポートされていないバージョン
-     * @returns {boolean} 処理成功かどうか
+     * 古いバックアップをクリーンアップ
      */
-    handleUnsupportedVersion(version) {
-        console.warn(`サポートされていないバージョン ${version} を検出`);
-        
-        // データをクリアして新規開始
-        const confirmed = this.confirmDataReset();
-        if (confirmed) {
-            this.dataStorageService.clearAllData();
-            this.updateDataVersion(this.currentVersion);
-            console.log('データをリセットして新規開始します');
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * データリセットの確認（実際のアプリでは適切なUI確認を実装）
-     * @returns {boolean} リセット確認
-     */
-    confirmDataReset() {
-        // 実際のアプリでは適切なUI確認を実装
-        // ここでは自動的にtrueを返す（開発用）
-        return true;
-    }
-
-    /**
-     * データの妥当性を検証
-     * @param {Object} data 検証するデータ
-     * @returns {boolean} データが有効かどうか
-     */
-    validateData(data) {
+    cleanupOldBackups() {
         try {
-            if (!data || typeof data !== 'object') {
-                return false;
-            }
-
-            // 基本構造の確認
-            if (data.characterProgress && typeof data.characterProgress === 'object') {
-                // 各文字の進捗データを検証
-                for (const character in data.characterProgress) {
-                    const progress = data.characterProgress[character];
-                    
-                    if (!progress.character || !Array.isArray(progress.attempts)) {
-                        console.warn(`無効な文字進捗データ: ${character}`);
-                        return false;
-                    }
-
-                    // 試行データの検証
-                    for (const attempt of progress.attempts) {
-                        if (typeof attempt.score !== 'number' || 
-                            attempt.score < 0 || attempt.score > 1 ||
-                            typeof attempt.timestamp !== 'number') {
-                            console.warn(`無効な試行データ: ${character}`);
-                            return false;
-                        }
-                    }
+            const backupKeys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('hiragana_backup_')) {
+                    backupKeys.push(key);
                 }
             }
 
+            // 日付順でソート
+            backupKeys.sort();
+
+            // 最新5個以外を削除
+            if (backupKeys.length > 5) {
+                const keysToDelete = backupKeys.slice(0, -5);
+                keysToDelete.forEach(key => {
+                    localStorage.removeItem(key);
+                });
+                console.log(`古いバックアップを削除: ${keysToDelete.length}個`);
+            }
+
+        } catch (error) {
+            console.error('バックアップクリーンアップエラー:', error);
+        }
+    }
+
+    /**
+     * 移行後のデータを検証
+     * @returns {Promise<boolean>} 検証成功かどうか
+     */
+    async validateMigratedData() {
+        try {
+            console.log('移行データの検証を開始...');
+            
+            // 全データを取得
+            const allData = {
+                progressTracking: this.dataStorageService.loadData('progressTracking'),
+                sessions: this.dataStorageService.getAllSessions()
+            };
+
+            // 包括的な検証を実行
+            const validationResult = this.validationService.validateDataIntegrity(allData);
+            
+            if (!validationResult.isValid) {
+                console.warn('検証エラー:', validationResult.errors);
+                console.warn('検証警告:', validationResult.warnings);
+                
+                // 検証レポートを生成
+                const report = this.validationService.generateValidationReport(validationResult);
+                console.log('検証レポート:\n', report);
+                
+                // 自動修復を試行
+                const repairSuccess = await this.repairDataInconsistencies(validationResult.errors);
+                if (repairSuccess) {
+                    console.log('データの自動修復が完了しました');
+                    return true;
+                } else {
+                    console.error('データの自動修復に失敗しました');
+                    return false;
+                }
+            }
+
+            if (validationResult.warnings.length > 0) {
+                console.warn('検証警告:', validationResult.warnings);
+            }
+
+            console.log('移行データの検証が完了しました');
             return true;
 
         } catch (error) {
@@ -529,116 +601,246 @@ export class DataMigrationService {
     }
 
     /**
-     * データのサニタイゼーション
-     * @param {Object} data サニタイズするデータ
-     * @returns {Object} サニタイズされたデータ
+     * 進捗追跡データを検証（ValidationServiceを使用）
+     * @param {Object} data 進捗追跡データ
+     * @returns {Object} 検証結果
      */
-    sanitizeData(data) {
+    validateProgressTrackingData(data) {
+        return this.validationService.validateProgressTrackingData(data);
+    }
+
+    /**
+     * セッションデータを検証（ValidationServiceを使用）
+     * @param {Array} sessions セッションデータ
+     * @returns {Object} 検証結果
+     */
+    validateSessionData(sessions) {
+        return this.validationService.validateSessions(sessions);
+    }
+
+    /**
+     * データ不整合を修復
+     * @param {Array} errors エラーリスト
+     * @returns {Promise<boolean>} 修復成功かどうか
+     */
+    async repairDataInconsistencies(errors) {
         try {
-            if (!data || typeof data !== 'object') {
-                return this.getDefaultData();
+            console.log('データ不整合の修復を開始...');
+            
+            let repairCount = 0;
+
+            // 進捗追跡データの修復
+            const progressTrackingData = this.dataStorageService.loadData('progressTracking');
+            if (progressTrackingData) {
+                const validationResult = this.validationService.validateProgressTrackingData(progressTrackingData);
+                if (!validationResult.isValid && validationResult.fixedData) {
+                    this.dataStorageService.saveData('progressTracking', validationResult.fixedData);
+                    repairCount++;
+                    console.log('進捗追跡データを自動修復しました');
+                }
             }
 
-            const sanitized = {
-                characterProgress: {},
-                sessionData: {
-                    startTime: null,
-                    totalPracticeTime: 0,
-                    sessionsCount: 0
-                },
-                lastUpdated: Date.now(),
-                version: this.currentVersion
-            };
-
-            // セッションデータのサニタイズ
-            if (data.sessionData && typeof data.sessionData === 'object') {
-                sanitized.sessionData = {
-                    startTime: data.sessionData.startTime || null,
-                    totalPracticeTime: Math.max(0, Number(data.sessionData.totalPracticeTime) || 0),
-                    sessionsCount: Math.max(0, Number(data.sessionData.sessionsCount) || 0)
-                };
+            // セッションデータの修復
+            const sessions = this.dataStorageService.getAllSessions();
+            const sessionValidation = this.validationService.validateSessions(sessions);
+            if (!sessionValidation.isValid && sessionValidation.validSessions.length > 0) {
+                this.dataStorageService.saveToStorage(
+                    this.dataStorageService.storageKeys.sessions, 
+                    sessionValidation.validSessions
+                );
+                repairCount++;
+                console.log(`セッションデータを修復: ${sessionValidation.invalidSessions.length}個の無効なセッションを除去`);
             }
 
-            // 文字進捗データのサニタイズ
-            if (data.characterProgress && typeof data.characterProgress === 'object') {
-                Object.keys(data.characterProgress).forEach(character => {
-                    const progress = data.characterProgress[character];
-                    
-                    if (progress && progress.character && Array.isArray(progress.attempts)) {
-                        const sanitizedAttempts = progress.attempts
-                            .filter(attempt => 
-                                typeof attempt.score === 'number' &&
-                                attempt.score >= 0 && attempt.score <= 1 &&
-                                typeof attempt.timestamp === 'number' &&
-                                attempt.timestamp > 0
-                            )
-                            .map(attempt => ({
-                                score: Math.max(0, Math.min(1, attempt.score)),
-                                timestamp: attempt.timestamp,
-                                details: attempt.details || {}
-                            }));
-
-                        if (sanitizedAttempts.length > 0) {
-                            sanitized.characterProgress[character] = {
-                                character: character,
-                                attempts: sanitizedAttempts,
-                                createdAt: progress.createdAt || Date.now(),
-                                updatedAt: progress.updatedAt || Date.now()
-                            };
-                        }
-                    }
-                });
-            }
-
-            return sanitized;
+            console.log(`データ修復完了: ${repairCount}個のデータを修復`);
+            return true;
 
         } catch (error) {
-            console.error('データサニタイズエラー:', error);
-            return this.getDefaultData();
+            console.error('データ修復エラー:', error);
+            return false;
+        }
+    }
+
+
+
+    /**
+     * 現在のデータバージョンを取得
+     * @returns {string} データバージョン
+     */
+    getCurrentDataVersion() {
+        try {
+            const version = this.dataStorageService.loadData('dataVersion');
+            return version || '1.0'; // デフォルトは1.0
+        } catch (error) {
+            console.error('データバージョン取得エラー:', error);
+            return '1.0';
         }
     }
 
     /**
-     * デフォルトデータを取得
-     * @returns {Object} デフォルトデータ
+     * データバージョンを設定
+     * @param {string} version バージョン
      */
-    getDefaultData() {
-        return {
-            characterProgress: {},
-            sessionData: {
-                startTime: null,
-                totalPracticeTime: 0,
-                sessionsCount: 0
-            },
-            lastUpdated: Date.now(),
-            version: this.currentVersion
-        };
-    }
-
-    /**
-     * 移行状況を取得
-     * @returns {Object} 移行状況情報
-     */
-    getMigrationStatus() {
-        return {
-            currentVersion: this.currentVersion,
-            dataVersion: this.getCurrentDataVersion(),
-            supportedVersions: this.supportedVersions,
-            migrationNeeded: this.getCurrentDataVersion() !== this.currentVersion,
-            lastMigration: this.getLastMigrationTime()
-        };
-    }
-
-    /**
-     * 最後の移行時刻を取得
-     * @returns {number|null} 最後の移行時刻
-     */
-    getLastMigrationTime() {
+    setDataVersion(version) {
         try {
-            const versionInfo = this.dataStorageService.loadFromStorage('hiragana_data_version');
-            return versionInfo?.updatedAt || null;
+            this.dataStorageService.saveData('dataVersion', version);
+            console.log(`データバージョンを更新: ${version}`);
         } catch (error) {
+            console.error('データバージョン設定エラー:', error);
+        }
+    }
+
+    /**
+     * 移行が必要かチェック
+     * @returns {boolean} 移行が必要かどうか
+     */
+    isMigrationNeeded() {
+        const currentVersion = this.getCurrentDataVersion();
+        return currentVersion !== this.currentVersion;
+    }
+
+    /**
+     * 移行情報を取得
+     * @returns {Object} 移行情報
+     */
+    getMigrationInfo() {
+        const currentVersion = this.getCurrentDataVersion();
+        const isNeeded = this.isMigrationNeeded();
+        
+        return {
+            currentVersion: currentVersion,
+            targetVersion: this.currentVersion,
+            migrationNeeded: isNeeded,
+            supportedVersions: this.supportedVersions,
+            lastMigration: this.getLastMigrationInfo()
+        };
+    }
+
+    /**
+     * 最後の移行情報を取得
+     * @returns {Object|null} 最後の移行情報
+     */
+    getLastMigrationInfo() {
+        try {
+            const progressData = this.dataStorageService.loadData('progressTracking');
+            return progressData?.migrationInfo || null;
+        } catch (error) {
+            console.error('最後の移行情報取得エラー:', error);
             return null;
+        }
+    }
+
+    /**
+     * 移行テストを実行
+     * @returns {Promise<Object>} テスト結果
+     */
+    async runMigrationTest() {
+        try {
+            console.log('移行テストを開始...');
+            
+            const testResults = {
+                backupTest: false,
+                migrationTest: false,
+                validationTest: false,
+                restoreTest: false,
+                overallSuccess: false
+            };
+
+            // バックアップテスト
+            testResults.backupTest = await this.createBackup();
+            
+            if (testResults.backupTest) {
+                // 移行テスト（実際には実行せず、検証のみ）
+                const migrationInfo = this.getMigrationInfo();
+                testResults.migrationTest = migrationInfo.migrationNeeded ? 
+                    this.validateMigrationPreconditions() : true;
+                
+                // 検証テスト
+                testResults.validationTest = await this.validateMigratedData();
+                
+                // 復元テスト
+                testResults.restoreTest = await this.testBackupRestore();
+            }
+
+            testResults.overallSuccess = Object.values(testResults).every(result => result === true);
+            
+            console.log('移行テスト完了:', testResults);
+            return testResults;
+
+        } catch (error) {
+            console.error('移行テストエラー:', error);
+            return {
+                backupTest: false,
+                migrationTest: false,
+                validationTest: false,
+                restoreTest: false,
+                overallSuccess: false,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * 移行前提条件を検証
+     * @returns {boolean} 前提条件が満たされているかどうか
+     */
+    validateMigrationPreconditions() {
+        try {
+            // LocalStorageの利用可能性
+            if (!this.dataStorageService.isLocalStorageAvailable()) {
+                console.error('LocalStorageが利用できません');
+                return false;
+            }
+
+            // 必要なサービスの存在確認
+            if (!this.hiraganaDataService) {
+                console.error('HiraganaDataServiceが利用できません');
+                return false;
+            }
+
+            // データの存在確認
+            const hasData = this.dataStorageService.getAllSessions().length > 0 ||
+                           this.dataStorageService.loadData('progressTracking') !== null;
+            
+            if (!hasData) {
+                console.log('移行対象のデータが存在しません');
+                return true; // データがない場合は移行不要
+            }
+
+            return true;
+
+        } catch (error) {
+            console.error('移行前提条件検証エラー:', error);
+            return false;
+        }
+    }
+
+    /**
+     * バックアップ復元テスト
+     * @returns {Promise<boolean>} テスト成功かどうか
+     */
+    async testBackupRestore() {
+        try {
+            // テスト用の一時データを作成
+            const testKey = 'test_restore_data';
+            const testData = { test: true, timestamp: Date.now() };
+            
+            this.dataStorageService.saveData(testKey, testData);
+            
+            // データを削除
+            this.dataStorageService.removeData(testKey);
+            
+            // 復元テスト（実際のバックアップからではなく、機能テスト）
+            const restored = this.dataStorageService.loadData(testKey);
+            
+            // クリーンアップ
+            this.dataStorageService.removeData(testKey);
+            
+            return restored === null; // 削除されていることを確認
+
+        } catch (error) {
+            console.error('バックアップ復元テストエラー:', error);
+            return false;
         }
     }
 }

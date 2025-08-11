@@ -220,11 +220,11 @@ export class ProgressTrackingService {
     }
 
     /**
-     * 難易度別進捗を取得
+     * 難易度別進捗を取得（旧システム互換性維持）
      * @returns {Object} 難易度別進捗情報
      */
     getProgressByDifficulty() {
-        // 実際のアプリではHiraganaDataServiceから文字と難易度の対応を取得
+        // 旧システムとの互換性を維持
         const difficultyMap = {
             1: ['あ', 'い', 'う', 'え', 'お'],
             2: ['か', 'き', 'く', 'け', 'こ', 'さ', 'し', 'す', 'せ', 'そ', 'た', 'ち', 'つ', 'て', 'と', 'な', 'に', 'ぬ', 'ね', 'の'],
@@ -232,6 +232,9 @@ export class ProgressTrackingService {
             4: ['ら', 'り', 'る', 'れ', 'ろ', 'わ', 'を', 'ん']
         };
 
+        // 新しい画数複雑度システムの進捗も含める
+        const strokeComplexityProgress = this.getProgressByStrokeComplexity();
+        
         const difficultyProgress = {};
 
         Object.keys(difficultyMap).forEach(difficulty => {
@@ -265,7 +268,58 @@ export class ProgressTrackingService {
             };
         });
 
+        // 新しいシステムの進捗も追加
+        Object.assign(difficultyProgress, strokeComplexityProgress);
+
         return difficultyProgress;
+    }
+
+    /**
+     * 画数複雑度別進捗を取得（新システム）
+     * @returns {Object} 画数複雑度別進捗情報
+     */
+    getProgressByStrokeComplexity() {
+        // 新しい3段階難易度システムの文字分類
+        const strokeComplexityMap = {
+            'beginner': ['く', 'し', 'つ', 'て', 'そ', 'の', 'へ', 'ん', 'い', 'う', 'り'],
+            'intermediate': ['あ', 'お', 'か', 'け', 'こ', 'さ', 'せ', 'に', 'は', 'ま', 'も', 'や', 'ろ', 'わ', 'え', 'ひ', 'る', 'れ'],
+            'advanced': ['き', 'た', 'な', 'ぬ', 'ね', 'ふ', 'ほ', 'む', 'め', 'ゆ', 'よ', 'ら', 'を']
+        };
+
+        const strokeComplexityProgress = {};
+
+        Object.keys(strokeComplexityMap).forEach(level => {
+            const characters = strokeComplexityMap[level];
+            let totalScore = 0;
+            let totalAttempts = 0;
+            let masteredCount = 0;
+            let practicedCount = 0;
+
+            characters.forEach(character => {
+                const progress = this.characterProgressMap.get(character);
+                if (progress) {
+                    practicedCount++;
+                    const stats = progress.getStatistics();
+                    totalScore += stats.averageScore * stats.attemptCount;
+                    totalAttempts += stats.attemptCount;
+
+                    if (stats.masteryLevel >= 0.7) {
+                        masteredCount++;
+                    }
+                }
+            });
+
+            strokeComplexityProgress[level] = {
+                totalCharacters: characters.length,
+                practicedCharacters: practicedCount,
+                masteredCharacters: masteredCount,
+                averageScore: totalAttempts > 0 ? totalScore / totalAttempts : 0,
+                completionRate: practicedCount / characters.length,
+                masteryRate: masteredCount / characters.length
+            };
+        });
+
+        return strokeComplexityProgress;
     }
 
     /**

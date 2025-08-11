@@ -644,4 +644,100 @@ export class RandomizationService {
             this.selectionWeights.set(char.character, 1.0);
         });
     }
+
+    /**
+     * 画数複雑度レベルに基づいて次の文字を選択
+     * @param {string} currentCharacter 現在の文字
+     * @param {Object} preferences 選択設定
+     * @returns {HiraganaCharacter} 選択された文字
+     */
+    selectNextCharacterByStrokeComplexity(currentCharacter = null, preferences = {}) {
+        try {
+            if (!this.isInitialized) {
+                throw new Error('RandomizationServiceが初期化されていません');
+            }
+
+            const {
+                strokeComplexityLevel = 'beginner',
+                avoidRecent = true,
+                useProgressWeighting = false
+            } = preferences;
+
+            // 指定された画数複雑度レベルの文字を取得
+            const availableCharacters = this.hiraganaDataService.getCharactersByStrokeComplexity(strokeComplexityLevel);
+            
+            if (availableCharacters.length === 0) {
+                console.warn(`画数複雑度レベル「${strokeComplexityLevel}」の文字が見つかりません`);
+                return this.getFallbackCharacter();
+            }
+
+            // 現在の文字を除外
+            let filteredCharacters = availableCharacters;
+            if (currentCharacter && avoidRecent) {
+                filteredCharacters = availableCharacters.filter(char => 
+                    char.character !== currentCharacter
+                );
+                
+                if (filteredCharacters.length === 0) {
+                    filteredCharacters = availableCharacters;
+                }
+            }
+
+            // 最近の文字を除外
+            if (avoidRecent && this.recentCharacters.length > 0) {
+                const withoutRecent = filteredCharacters.filter(char => 
+                    !this.recentCharacters.includes(char.character)
+                );
+                
+                if (withoutRecent.length > 0) {
+                    filteredCharacters = withoutRecent;
+                }
+            }
+
+            // 文字を選択
+            let selectedCharacter;
+            if (useProgressWeighting && this.progressTrackingService) {
+                selectedCharacter = this.performWeightedSelection(filteredCharacters);
+            } else {
+                selectedCharacter = this.simpleRandomSelection(filteredCharacters);
+            }
+
+            // 履歴を更新
+            try {
+                this.updateRecentHistory(selectedCharacter.character);
+                this.hiraganaDataService.selectCharacter(selectedCharacter.character);
+            } catch (updateError) {
+                console.warn('画数複雑度選択後の更新エラー:', updateError);
+            }
+
+            if (this.errorHandler) {
+                this.errorHandler.logCharacterSelectionDebug('stroke_complexity_selection_success', {
+                    selectedCharacter: selectedCharacter.character,
+                    strokeComplexityLevel,
+                    availableCount: availableCharacters.length,
+                    filteredCount: filteredCharacters.length
+                });
+            }
+
+            console.log(`画数複雑度選択完了: ${selectedCharacter.character} (レベル: ${strokeComplexityLevel})`);
+            return selectedCharacter;
+
+        } catch (error) {
+            console.error('画数複雑度による文字選択エラー:', error);
+            
+            if (this.errorHandler) {
+                const result = this.errorHandler.handleCharacterError(error, {
+                    operation: 'strokeComplexitySelection',
+                    method: 'selectNextCharacterByStrokeComplexity',
+                    preferences
+                });
+                
+                if (result.fallback) {
+                    return result.fallback;
+                }
+            }
+            
+            return this.getFallbackCharacter();
+        }
+    }
 }
